@@ -30,7 +30,7 @@ class Consumer(kafka.io.IO):
   DEFAULT_POLLING_INTERVAL = 2 # seconds.
   MAX_OFFSETS = 100
 
-  def __init__(self, topic, partition=0, host='localhost', port=9092):
+  def __init__(self, topic, partition=0, host='localhost', port=9092, offset=0):
     kafka.io.IO.__init__(self, host, port)
 
     #: The topic queue to consume.
@@ -38,7 +38,7 @@ class Consumer(kafka.io.IO):
     #: The partition the topic queue is on.
     self.partition    = partition
     #: Offset in the Kafka queue in bytes?
-    self.offset       = 0
+    self.offset       = offset
     #: Maximum message size to consume.
     self.max_size     = self.MAX_SIZE
     self.request_type = self.CONSUME_REQUEST_TYPE
