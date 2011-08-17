@@ -1,3 +1,4 @@
+import logging
 import struct
 import time
 
@@ -11,6 +12,7 @@ class WrongPartitionCode(ConsumerError): pass
 class InvalidRetchSizeCode(ConsumerError): pass
 class UnknownError(ConsumerError): pass
 class NoData(ConsumerError): pass
+class InvalidMessage(ConsumerError): pass
 
 error_codes = {
     1: OffsetOutOfRange,
@@ -19,7 +21,7 @@ error_codes = {
     4: InvalidRetchSizeCode,
 }
 
-
+log = logging.getLogger('kafka.consumer')
 
 class Consumer(kafka.io.IO):
 
@@ -81,7 +83,7 @@ class Consumer(kafka.io.IO):
     """ Consume data from the topic queue. """
     self.send_consume_request()
     try:
-      return self.parse_message_set_from(self.read_data_response())
+      return self.read_data_response()
     except NoData:
       return []
   
@@ -92,7 +94,7 @@ class Consumer(kafka.io.IO):
       messages = self.consume()
       for message in messages:
         if not message.is_valid():
-          print 'crc mismatch'
+          raise InvalidMessage('CRC mismatch')
         else:
           yield message
       
@@ -111,10 +113,33 @@ class Consumer(kafka.io.IO):
     if error_code != 0:
         raise error_codes.get(error_code, UnknownError)('Code: {0} (offset {1})'.format(error_code, self.offset))
     
-    output = data[2:]
+    message_set = data[2:]
     
-    if output:
-        return output
+    if message_set:
+        log.debug('buf_length: {0}'.format(buf_length))
+        messages  = []
+        processed = 0
+        length    = len(message_set) - 4
+        assert length > 0
+        log.debug('message_set_size: {0}'.format(length))
+        
+        while (processed <= length):
+          message_size_offset = processed + 4
+          raw_message_size = message_set[processed:message_size_offset]
+          message_size = struct.unpack('!I', raw_message_size)[0]
+          
+          log.debug('message_size: {0}'.format(message_size))
+          assert message_size < len(message_set), message_size
+          
+          message_offset = message_size_offset + message_size
+          raw_message = message_set[processed:message_offset]
+          message = kafka.message.parse_from(raw_message)
+          messages.append(message)
+          processed += 4 + message_size
+
+        self.offset += processed
+        log.debug('New offset: {0}'.format(self.offset))
+        return messages
     else:
         raise NoData()
 
@@ -143,18 +168,3 @@ class Consumer(kafka.io.IO):
     self.write(self.encode_offsets_request_size())
     self.write(self.encode_offsets_request(self.topic, self.partition, -2, self.MAX_OFFSETS ))
   
-  def parse_message_set_from(self, data):
-    messages  = []
-    processed = 0
-    length    = len(data) - 4
-    assert length > 0
-    
-    while (processed <= length):
-      message_size = struct.unpack('>I', data[processed:processed+4])[0]
-      assert message_size < len(data)
-      messages.append(kafka.message.parse_from(data[processed:processed + message_size + 4]))
-      processed += 4 + message_size
-
-    self.offset += processed
-    print self.offset
-    return messages

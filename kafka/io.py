@@ -1,6 +1,10 @@
 import array
 import errno
+import logging
 import socket
+from StringIO import StringIO
+
+log = logging.getLogger('kafka.io')
 
 class ConnectionFailure(Exception): pass
 
@@ -15,6 +19,8 @@ class IO(object):
 
     #: Port to connect to.
     self.port   = port
+    
+    self.overflow = ''
 
   def connect(self):
     """ Connect to the Kafka server. """
@@ -46,16 +52,28 @@ class IO(object):
     # Create a character array to act as the buffer.
     buf         = array.array('c', ' ' * length)
     read_length = 0
-
+    
+    read_data_buf = StringIO()
+    
     try:
+      log.debug('expected {0} bytes to recv'.format(length))
       while read_length < length:
-        read_length += self.socket.recv_into(buf, length)
+        chunk_size = self.socket.recv_into(buf, length)
+        chunk = buf.tostring()
+        read_data_buf.write(chunk[0:chunk_size])
+        read_length += chunk_size
+        log.debug('recv ({1}): {0}'.format(repr(chunk), chunk_size))
 
     except errno.EAGAIN:
       self.disconnect()
       raise IOError, "Timeout reading from the socket."
     else:
-      return buf.tostring()
+      read_data = read_data_buf.getvalue()
+      log.debug('recv {0} bytes'.format(len(read_data)))
+      output = self.overflow + read_data[0:length]
+      self.overflow = read_data[length:]
+      
+      return output
 
 
   def write(self, data):
@@ -82,6 +100,7 @@ class IO(object):
     wrote_length = 0
 
     while write_length > wrote_length:
+      log.debug('send: {0}'.format(repr(data)))
       wrote_length += self.socket.send(data)
 
     return wrote_length
