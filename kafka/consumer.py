@@ -4,6 +4,22 @@ import time
 import kafka.io
 import kafka.request_type
 
+class ConsumerError(Exception): pass
+class OffsetOutOfRange(ConsumerError): pass
+class InvalidMessageCode(ConsumerError): pass
+class WrongPartitionCode(ConsumerError): pass
+class InvalidRetchSizeCode(ConsumerError): pass
+class UnknownError(ConsumerError): pass
+
+error_codes = {
+    1: OffsetOutOfRange,
+    2: InvalidMessageCode,
+    3: WrongPartitionCode,
+    4: InvalidRetchSizeCode,
+}
+
+
+
 class Consumer(kafka.io.IO):
 
   CONSUME_REQUEST_TYPE = kafka.request_type.FETCH
@@ -34,7 +50,6 @@ class Consumer(kafka.io.IO):
 
   def consume(self):
     """ Consume data from the topic queue. """
-
     self.send_consume_request()
 
     return self.parse_message_set_from(self.read_data_response())
@@ -47,6 +62,8 @@ class Consumer(kafka.io.IO):
 
       if messages and isinstance(messages, list) and len(messages) > 0:
         for message in messages:
+          if message.is_valid():
+              print 'crc mismatch'
           yield message
 
       time.sleep(self.polling)
@@ -56,22 +73,29 @@ class Consumer(kafka.io.IO):
     return 2 + 2 + len(self.topic) + 4 + 8 + 4
 
   def encode_request_size(self):
-    return struct.pack('>i', self.request_size())
+    return struct.pack('>I', self.request_size())
 
   def encode_request(self):
     length = len(self.topic)
 
-    return struct.pack('>HH%dsiQi' % length, self.request_type, length, self.topic, self.partition, self.offset, self.max_size)
+    return struct.pack('>HH%dsIQI' % length, self.request_type, length, self.topic, self.partition, self.offset, self.max_size)
 
   def send_consume_request(self):
     self.write(self.encode_request_size())
     self.write(self.encode_request())
 
   def read_data_response(self):
-    buf_length = struct.unpack('>i', self.read(4))[0]
-
-    # Start with a 2 byte offset
-    return self.read(buf_length)[2:]
+    raw_buf_length = self.read(4)
+    buf_length = struct.unpack('>I', raw_buf_length)[0]
+    print raw_buf_length
+    data = self.read(buf_length)
+    print data
+    error_code = struct.unpack('>H', data[0:2])[0]
+    
+    if error_code != 0:
+        raise error_codes.get(error_code, UnknownError)()
+    
+    return data[2:]
 
   def parse_message_set_from(self, data):
     messages  = []
@@ -79,7 +103,7 @@ class Consumer(kafka.io.IO):
     length    = len(data) - 4
 
     while (processed <= length):
-      message_size = struct.unpack('>i', data[processed:processed+4])[0]
+      message_size = struct.unpack('>I', data[processed:processed+4])[0]
       messages.append(kafka.message.parse_from(data[processed:processed + message_size + 4]))
       processed += 4 + message_size
 

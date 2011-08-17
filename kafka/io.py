@@ -2,6 +2,8 @@ import array
 import errno
 import socket
 
+class ConnectionFailure(Exception): pass
+
 class IO(object):
   """ Base class for handling socket communication to the Kafka server. """
 
@@ -18,7 +20,11 @@ class IO(object):
     """ Connect to the Kafka server. """
 
     self.socket = socket.socket()
-    self.socket.connect((self.host, self.port))
+    try:
+        self.socket.connect((self.host, self.port))
+    except Exception, e:
+        raise ConnectionFailure("Could not connect to kafka at {0}:{1}".format(self.host, self.port))
+        
 
   def reconnect(self):
     """ Reconnect to the Kafka server. """
@@ -37,20 +43,13 @@ class IO(object):
   def read(self, length):
     """ Send a read request to the remote Kafka server. """
 
-    # Create a character array to act as the buffer.
-    buf         = array.array('c', ' ' * length)
-    read_length = 0
-
     try:
-      while read_length < length:
-        read_length += self.socket.recv_into(buf, length)
+      return self.socket.recv(length)
 
     except errno.EAGAIN:
       self.disconnect()
       raise IOError, "Timeout reading from the socket."
 
-    else:
-      return buf.tostring()
 
   def write(self, data):
     """ Write `data` to the remote Kafka server. """

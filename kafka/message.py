@@ -1,5 +1,5 @@
 import struct
-import zlib
+import binascii
 
 def parse_from(binary):
   """ Turn a packed binary message as recieved from a Kafka broker into a :class:`Message`. """
@@ -8,11 +8,11 @@ def parse_from(binary):
   # 1 byte "magic" identifier to allow format changes
   # 4 byte CRC32 of the payload
   # N - 5 byte payload
-  size     = struct.unpack('>i', binary[0:4])[0]
-  magic    = struct.unpack('>B', binary[4:5])[0]
-  checksum = struct.unpack('>i', binary[5:9])[0]
+  size     = struct.unpack('!I', binary[0:4])[0]
+  magic    = struct.unpack('B', binary[4:5])[0]
+  checksum = struct.unpack('!I', binary[5:9])[0]
   payload  = binary[9:9+size]
-
+  
   return Message(payload, magic, checksum)
 
 class Message(object):
@@ -46,7 +46,7 @@ class Message(object):
   def calculate_checksum(self):
     """ Returns the checksum for the payload. """
 
-    return zlib.crc32(self.payload)
+    return binascii.crc32(self.payload)
 
   def is_valid(self):
     """ Returns true if the checksum for this message is valid. """
