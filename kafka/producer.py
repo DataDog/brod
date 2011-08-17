@@ -21,8 +21,6 @@ class Producer(kafka.io.IO):
     """ Encode a :class:`Message` to binary form. """
 
     # <MAGIC_BYTE: char> <CRC32: int> <PAYLOAD: bytes>
-    print message.payload
-    print message.calculate_checksum()
     return struct.pack('>B', 0) + \
            struct.pack('>i', binascii.crc32(message.payload)) + \
            message.payload

@@ -43,12 +43,19 @@ class IO(object):
   def read(self, length):
     """ Send a read request to the remote Kafka server. """
 
+    # Create a character array to act as the buffer.
+    buf         = array.array('c', ' ' * length)
+    read_length = 0
+
     try:
-      return self.socket.recv(length)
+      while read_length < length:
+        read_length += self.socket.recv_into(buf, length)
 
     except errno.EAGAIN:
       self.disconnect()
       raise IOError, "Timeout reading from the socket."
+    else:
+      return buf.tostring()
 
 
   def write(self, data):

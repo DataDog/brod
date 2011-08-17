@@ -10,6 +10,7 @@ class InvalidMessageCode(ConsumerError): pass
 class WrongPartitionCode(ConsumerError): pass
 class InvalidRetchSizeCode(ConsumerError): pass
 class UnknownError(ConsumerError): pass
+class NoData(ConsumerError): pass
 
 error_codes = {
     1: OffsetOutOfRange,
@@ -61,12 +62,10 @@ class Consumer(kafka.io.IO):
     return struct.pack('>HH%dsIQI' % length, self.request_type, length, self.topic, self.partition, self.offset, self.max_size)
 
   def offsets_request_size(self):
-    print self.topic
-    print str(len(self.topic))
     return 2 + 2 + len(self.topic) + 4 + 8 + 4
   
 
-  def encode_offsets_request_size(self):
+  def encode_offsets_request(self):
     return struct.pack('>I', self.offsets_request_size())
   
   def encode_offsets_request(self, topic):
@@ -81,22 +80,22 @@ class Consumer(kafka.io.IO):
   def consume(self):
     """ Consume data from the topic queue. """
     self.send_consume_request()
-
-    return self.parse_message_set_from(self.read_data_response())
+    try:
+      return self.parse_message_set_from(self.read_data_response())
+    except NoData:
+      return []
   
   def loop(self):
     """ Loop over incoming messages from the queue in a blocking fashion. Set `polling` for the check interval in seconds. """
 
     while True:
       messages = self.consume()
-      for msg in messages:
-        print "Message: ", msg.payload
-      if messages and isinstance(messages, list) and len(messages) > 0:
-        for message in messages:
-          if message.is_valid():
-              print 'crc mismatch'
+      for message in messages:
+        if not message.is_valid():
+          print 'crc mismatch'
+        else:
           yield message
-
+      
       time.sleep(self.polling)
 
   def send_consume_request(self):
@@ -106,15 +105,18 @@ class Consumer(kafka.io.IO):
   def read_data_response(self):
     raw_buf_length = self.read(4)
     buf_length = struct.unpack('>I', raw_buf_length)[0]
-    print raw_buf_length
     data = self.read(buf_length)
-    print data
     error_code = struct.unpack('>H', data[0:2])[0]
     
     if error_code != 0:
-        raise error_codes.get(error_code, UnknownError)()
+        raise error_codes.get(error_code, UnknownError)('Code: {0} (offset {1})'.format(error_code, self.offset))
     
-    return data[2:]
+    output = data[2:]
+    
+    if output:
+        return output
+    else:
+        raise NoData()
 
   def read_offsets_response(self):
     buf_length = struct.unpack('>I', self.read(4))[0]
@@ -138,23 +140,21 @@ class Consumer(kafka.io.IO):
     return res
   
   def send_offsets_request(self):
-    x = self.encode_offsets_request_size()
-    print "Encode Request Size: " , str(x)
-    y = self.encode_offsets_request(self.topic, self.partition, -2, self.MAX_OFFSETS )
-    print "Encode Request: " , str(y)
-    self.write(x)
-    self.write(y)
+    self.write(self.encode_offsets_request_size())
+    self.write(self.encode_offsets_request(self.topic, self.partition, -2, self.MAX_OFFSETS ))
   
   def parse_message_set_from(self, data):
     messages  = []
     processed = 0
     length    = len(data) - 4
-
+    assert length > 0
+    
     while (processed <= length):
       message_size = struct.unpack('>I', data[processed:processed+4])[0]
+      assert message_size < len(data)
       messages.append(kafka.message.parse_from(data[processed:processed + message_size + 4]))
       processed += 4 + message_size
 
     self.offset += processed
-
+    print self.offset
     return messages
