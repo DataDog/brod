@@ -37,4 +37,4 @@ Contact:
 
 Please use the GitHub issues: https://github.com/datadog/pykafka/issues
 
-* Forked from https://github.com/dsully/pykafka which was inspiried by Alejandro Crosa's kafka-rb: https://github.com/acrosa/kafka-rb
+* Forked from https://github.com/dsully/pykafka which was inspired by Alejandro Crosa's kafka-rb: https://github.com/acrosa/kafka-rb
