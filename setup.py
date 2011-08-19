@@ -2,27 +2,16 @@
 
 import setuptools
 
-# Don't install deps for development mode.
-setuptools.bootstrap_install_from = None
-
 setuptools.setup(
   name = 'pykafka',
-  version = '1.1.0',
+  version = '2.0.0',
   license = 'MIT',
   description = open('README.md').read(),
-  author = "Dan Sully",
-  author_email = "dsully@gmail.com",
-  url = 'http://github.com/dsully/pykafka',
+  author = "Datadog, Inc.",
+  author_email = "packages@datadoghq.com",
+  url = 'https://github.com/datadog/pykafka',
   platforms = 'any',
-
-  # What are we packaging up?
-  packages = ['kafka'],
-
-  tests_require = [
-    'nose',
-    'ludibrio',
-  ],
-
+  py_modules = ['kafka'],
   zip_safe = True,
   verbose = False,
 )
