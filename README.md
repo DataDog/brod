@@ -9,7 +9,7 @@ TCP. You can obtain a copy and instructions on how to setup kafka at
 https://github.com/kafka-dev/kafka
 
 ## Installation
-easy_install -f 'https://github.com/DataDog/pykafka/tarball/2.0.0#egg=pykafka-2.0.0' pykafka
+easy_install -f 'https://github.com/DataDog/pykafka/tarball/2.1.0#egg=pykafka-2.1.0' pykafka
 
 ## Usage
 
