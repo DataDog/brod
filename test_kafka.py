@@ -1,7 +1,12 @@
 import logging
 import time
 import unittest
-from kafka import Kafka, LATEST_OFFSET, EARLIEST_OFFSET, ConnectionFailure
+from kafka import (
+    Kafka, 
+    LATEST_OFFSET, EARLIEST_OFFSET, Lengths, 
+    ConnectionFailure
+)
+
 from kafka.nonblocking import KafkaTornado
 
 try:
@@ -36,7 +41,9 @@ class TestKafkaBlocking(unittest.TestCase):
             max_offsets=1)
             
         self.assertEquals(len(actual_latest_offsets), 1)
-        self.assertEquals(offsets[-1], actual_latest_offsets[0])
+        expected_latest_offset = offsets[-1] + Lengths.MESSAGE_HEADER \
+            + len(output_messages[-1])
+        self.assertEquals(expected_latest_offset, actual_latest_offsets[0])
         
         actual_earliest_offsets = kafka.offsets(topic, EARLIEST_OFFSET, 
             max_offsets=1)
@@ -82,7 +89,10 @@ if has_tornado:
             actual_latest_offsets = self.wait()
 
             self.assertEquals(len(actual_latest_offsets), 1)
-            self.assertEquals(offsets[-1], actual_latest_offsets[0])
+            expected_latest_offset = offsets[-1] + Lengths.MESSAGE_HEADER \
+                + len(output_messages[-1])
+            self.assertEquals(expected_latest_offset, 
+                actual_latest_offsets[0])
 
             kafka.offsets(topic, EARLIEST_OFFSET, 
                 max_offsets=1, callback=self.stop)

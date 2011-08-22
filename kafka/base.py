@@ -13,12 +13,12 @@ __all__ = [
     'WrongPartitionCode',
     'InvalidRetchSizeCode',
     'UnknownError',
-    'InvalidMessage',
     'PRODUCE_REQUEST',
     'FETCH_REQUEST',
     'OFFSETS_REQUEST',
     'LATEST_OFFSET',
     'EARLIEST_OFFSET',
+    'Lengths',
 ]
 
 class KafkaError(Exception): pass
@@ -28,7 +28,6 @@ class InvalidMessageCode(KafkaError): pass
 class WrongPartitionCode(KafkaError): pass
 class InvalidRetchSizeCode(KafkaError): pass
 class UnknownError(KafkaError): pass
-class InvalidMessage(KafkaError): pass
 
 error_codes = {
     1: OffsetOutOfRange,
@@ -49,6 +48,22 @@ LATEST_OFFSET   = -1
 EARLIEST_OFFSET = -2
 
 kafka_log  = logging.getLogger('kafka')
+
+class Lengths(object):
+    ERROR_CODE = 2
+    RESPONSE_SIZE = 4
+    REQUEST_TYPE = 2
+    TOPIC_LENGTH = 2
+    PARTITION = 4
+    OFFSET = 8
+    OFFSET_COUNT = 4
+    MAX_NUM_OFFSETS = 4
+    MAX_REQUEST_SIZE = 4
+    TIME_VAL = 8
+    MESSAGE_LENGTH = 4
+    MAGIC = 1
+    CHECKSUM = 4
+    MESSAGE_HEADER = MESSAGE_LENGTH + MAGIC + CHECKSUM
 
 class BaseKafka(object):
     MAX_RETRY = 3
@@ -118,77 +133,99 @@ class BaseKafka(object):
     def compute_checksum(value):
         return binascii.crc32(value)
 
-    @classmethod
-    def decode_message(cls, encoded_message):
-        # A message. The format of an N byte message is the following:
-        # 1 byte "magic" identifier to allow format changes
-        # 4 byte CRC32 of the payload
-        # N - 5 byte payload
-        size     = struct.unpack('>I', encoded_message[0:4])[0]
-        magic    = struct.unpack('>B', encoded_message[4:5])[0]
-        checksum = struct.unpack('>i', encoded_message[5:9])[0]
-        payload  = encoded_message[9:9 + size]
-
-        actual_checksum = cls.compute_checksum(payload)
-        assert checksum == actual_checksum, '{0} != {1}'.format(checksum, 
-            actual_checksum)
-
-        return payload
-
     # Private methods
 
     # Response decoding methods
     
-    def _read_fetch_response(self, callback, start_offset, message_set):
-        messages  = []
-
-        if message_set:
-            processed = 0
-            length    = len(message_set) - 4 # Hmm, not sure why it's - 4
-            assert length > 0
-
-            message_index = 0
-            while (processed <= length):
-                message_size_offset = processed + 4
-                raw_message_size = message_set[processed:message_size_offset]
-                message_size = struct.unpack('!I', raw_message_size)[0]
-
-                assert message_size < len(message_set), message_size
-
-                message_offset = message_size_offset + message_size
-                raw_message = message_set[processed:message_offset]
-                message = self.decode_message(raw_message)
-                kafka_log.debug('message {1}: {2} ({0} bytes)'.format(message_size, message_index, message))
-
-                offset_delta = 4 + message_size
-                processed += offset_delta
-
-                messages.append((start_offset + processed, message))
-                message_index += 1
+    def _read_fetch_response(self, callback, start_offset, message_buffer):
+        if message_buffer:
+            messages = self._parse_message_set(start_offset, message_buffer)
+        else:
+            messages = []
 
         if callback:
             return callback(messages)
         else:
             return messages
 
+    def _parse_message_set(self, start_offset, message_buffer):
+        offset = start_offset
+        
+        try:
+            has_more = True
+            while has_more:
+                offset = start_offset + message_buffer.tell() - Lengths.ERROR_CODE
+                
+                # Parse the message length (uint:4)
+                raw_message_length = message_buffer.read(Lengths.MESSAGE_LENGTH)
+                
+                if raw_message_length == '':
+                    break
+                elif len(raw_message_length) < Lengths.MESSAGE_LENGTH:
+                    kafka_log.error('Unexpected end of message set. Expected {0} bytes for message length, only read {1}'.format(Lengths.MESSAGE_LENGTH, len(raw_message_length)))
+                    break
+                
+                message_length = struct.unpack('>I', 
+                    raw_message_length)[0]
+                
+                # Parse the magic byte (int:1)
+                raw_magic = message_buffer.read(Lengths.MAGIC)
+                if len(raw_magic) < Lengths.MAGIC:
+                    kafka_log.error('Unexpected end of message set. Expected {0} bytes for magic byte, only read{1}'.format(Lengths.MAGIC, len(raw_magic)))
+                    break
+                
+                magic = struct.unpack('>B', raw_magic)[0]
+                
+                # Parse the checksum (int:4)
+                raw_checksum = message_buffer.read(Lengths.CHECKSUM)
+                if len(raw_checksum) < Lengths.CHECKSUM:
+                    kafka_log.error('Unexpected end of message set. Expected {0} bytes for checksum, only read {1}'.format(Lengths.CHECKSUM, len(raw_checksum)))
+                    break
+                    
+                checksum = struct.unpack('>i', raw_checksum)[0]
+                
+                # Parse the payload (variable length string)
+                payload_length = message_length - Lengths.MAGIC - Lengths.CHECKSUM
+                payload = message_buffer.read(payload_length)
+                if len(payload) < payload_length:
+                    kafka_log.error('Unexpected end of message set. Expected {0} bytes for payload, only read {1}'.format(payload_length, len(payload)))
+                    break
+                
+                actual_checksum = self.compute_checksum(payload)
+                if magic != MAGIC_BYTE:
+                    kafka_log.error('Unexpected magic byte: {0} (expecting {1})'.format(magic, MAGIC_BYTE))
+                    # Don't yield the corrupt message
+
+                elif checksum != actual_checksum:
+                    kafka_log.error('Checksum failure at offset {0}'.format(offset))
+                    # Don't yield the corrupt message
+
+                else:
+                    kafka_log.debug('message {0}: (offset: {1}, {2} bytes)'.format(payload, offset, message_length))
+
+                    yield offset, payload
+        finally:
+            message_buffer.close()
+
     def _read_offset_response(self, callback, data):
-        # The number of offsets received (4 byte unsigned int)
-        count = struct.unpack('>L', data[0:4])[0]
+        # The number of offsets received (uint:4)
+        raw_offset_count = data.read(Lengths.OFFSET_COUNT)
+        offset_count = struct.unpack('>L', raw_offset_count)[0]
 
-        offset_size = 8
-        res = []
-        pos = 4
-        while pos < len(data):
-            res.append(struct.unpack('>Q', data[pos:pos + offset_size])[0])
-            pos += offset_size
+        offsets = []
+        has_more = True
+        for i in range(offset_count):
+            raw_offset = data.read(Lengths.OFFSET)
+            offset = struct.unpack('>Q', raw_offset)[0]
+            offsets.append(offset)
 
-        assert len(res) <= count, 'Received more offsets than expected ({0} > {1})'.format(len(res), count)
-        kafka_log.debug('Received {0} offsets: {1}'.format(count, res))
+        #assert data.getvalue() == '', 'Some leftover data in offset response buffer: {0}'.format(data.getvalue())
+        kafka_log.debug('Received {0} offsets: {1}'.format(offset_count, len(offsets)))
 
         if callback:
-            return callback(res)
+            return callback(offsets)
         else:
-            return res
+            return offsets
     
     # Request encoding methods
     
@@ -196,7 +233,7 @@ class BaseKafka(object):
         message_set_buffer = StringIO()
 
         for message in messages:
-            # <MAGIC_BYTE: char> <CRC32: int> <PAYLOAD: bytes>
+            # <<int:1, int:4, str>>
             encoded_message = struct.pack('>Bi{0}s'.format(len(message)), 
                 MAGIC_BYTE, 
                 self.compute_checksum(message), 
@@ -209,7 +246,7 @@ class BaseKafka(object):
 
         message_set = message_set_buffer.getvalue()
 
-        # create the request as <REQUEST_SIZE: int>, <REQUEST_ID: short> <TOPIC: bytes> <PARTITION: int> <BUFFER: bytes>
+        # create the request <<unit:4, uint:2, uint:2, str, uint:4, uint:4, str>>>
         request = (
             PRODUCE_REQUEST,
             len(topic),
@@ -229,7 +266,14 @@ class BaseKafka(object):
     def _fetch_request(self, topic, offset, partition, max_size):
         # Build fetch request request
         topic_length = len(topic)
-        request_size = 2 + 2 + topic_length + 4 + 8 + 4
+        request_size = sum([
+            Lengths.REQUEST_TYPE,
+            Lengths.TOPIC_LENGTH, # length of the topic length
+            topic_length,
+            Lengths.PARTITION,
+            Lengths.OFFSET,
+            Lengths.MAX_REQUEST_SIZE
+        ])
         request = (
             FETCH_REQUEST, 
             topic_length, 
@@ -248,7 +292,15 @@ class BaseKafka(object):
         return bin_request_size, bin_request
     
     def _offsets_request(self, topic, time_val, max_offsets, partition):
-        offsets_request_size = 2 + 2 + len(topic) + 4 + 8 + 4
+        offsets_request_size = sum([
+            Lengths.REQUEST_TYPE,
+            Lengths.TOPIC_LENGTH,
+            len(topic),
+            Lengths.PARTITION,
+            Lengths.TIME_VAL,
+            Lengths.MAX_NUM_OFFSETS,
+        ])
+        
         offsets_request = (
             OFFSETS_REQUEST, 
             len(topic), 
@@ -273,7 +325,8 @@ class BaseKafka(object):
 
     def _wrote_request(self, callback):
         # Read the first 4 bytes, which is the response size (unsigned int)
-        return self._read(4, partial(self._read_response_size, callback))
+        return self._read(Lengths.RESPONSE_SIZE, 
+            partial(self._read_response_size, callback))
 
     def _read_response_size(self, callback, raw_buf_length):
         buf_length = struct.unpack('>I', raw_buf_length)[0]
@@ -283,11 +336,13 @@ class BaseKafka(object):
     
     def _read_response(self, callback, data):
         # Check if there is a non zero error code (2 byte unsigned int):
-        error_code = struct.unpack('>H', data[0:2])[0]
+        response_buffer = StringIO(data)
+        raw_error_code = response_buffer.read(Lengths.ERROR_CODE)
+        error_code = struct.unpack('>H', raw_error_code)[0]
         if error_code != 0:
             raise error_codes.get(error_code, UnknownError)('Code: {0}'.format(error_code))
         else:
-            return callback(data[2:])
+            return callback(response_buffer)
     
     # Socket management methods
     
