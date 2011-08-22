@@ -3,6 +3,7 @@ import logging
 import struct
 import time
 from cStringIO import StringIO
+from functools import partial
 
 __all__ = [
     'KafkaError',
@@ -61,121 +62,55 @@ class BaseKafka(object):
     # Public API
     
     def produce(self, topic, messages, partition=None, callback=None):
+        
+        # Clean up the input parameters
         partition = partition or 0
-
         topic = topic.encode('utf-8')
-
         if isinstance(messages, unicode):
             messages = [messages.encode('utf-8')]
         elif isinstance(messages, str):
             messages = [messages]
         
+        # Encode the request
         request = self._produce_request(topic, messages, partition)
+        
+        # Send the request
         return self._write(request, callback)
     
     def fetch(self, topic, offset, partition=None, max_size=None, callback=None):
         """ Consume data from the topic queue. """
         
+        # Clean up the input parameters
         topic = topic.encode('utf-8')
         partition = partition or 0
         max_size = max_size or self.max_size
-
+        
+        # Encode the request
         fetch_request_size, fetch_request = self._fetch_request(topic, offset, 
             partition, max_size)
         
-        def continue4(data):
-            error_code = struct.unpack('>H', data[0:2])[0]
+        # Send the request. The logic for handling the response 
+        # is in _read_fetch_response().
+        return self._write(fetch_request_size, 
+            partial(self._wrote_request_size, fetch_request, 
+                partial(self._read_fetch_response, callback, offset)))
 
-            if error_code != 0:
-                raise error_codes.get(error_code, UnknownError)('Code: {0} (offset {1})'.format(error_code, self.offset))
-
-            message_set = data[2:]
-
-            messages  = []
-
-            if message_set:
-                processed = 0
-                length    = len(message_set) - 4
-                assert length > 0
-
-                message_index = 0
-                while (processed <= length):
-                    message_size_offset = processed + 4
-                    raw_message_size = message_set[processed:message_size_offset]
-                    message_size = struct.unpack('!I', raw_message_size)[0]
-
-                    assert message_size < len(message_set), message_size
-
-                    message_offset = message_size_offset + message_size
-                    raw_message = message_set[processed:message_offset]
-                    message = self.decode_message(raw_message)
-                    kafka_log.debug('message {1}: {2} ({0} bytes)'.format(message_size, message_index, message))
-
-                    offset_delta = 4 + message_size
-                    processed += offset_delta
-
-                    messages.append((offset + processed, message))
-                    message_index += 1
-            
-            if callback:
-                return callback(messages)
-            else:
-                return messages
-        
-        def continue3(raw_buf_length):
-            buf_length = struct.unpack('>I', raw_buf_length)[0]
-            kafka_log.info('fetch response: {0} bytes'.format(buf_length))
-            return self._read(buf_length, continue4)
-        
-        def continue2():
-            # Read the response
-            return self._read(4, continue3)
-        
-        def continue1():
-            return self._write(fetch_request, continue2)
-        
-        return self._write(fetch_request_size, continue1)
-
-    
     def offsets(self, topic, time_val, max_offsets, partition=None, callback=None):
+        
+        # Clean up the input parameters
         partition = partition or 0
         
+        # Encode the request
         request_size, request = self._offsets_request(topic, time_val, 
             max_offsets, partition)
         
-        def continue4(data):
-            error_code = struct.unpack('>H', data[0:2])[0]
-            if error_code != 0:
-                raise error_codes.get(error_code, UnknownError)('Code: {0}'.format(error_code))
-
-            count = struct.unpack('>L', data[2:6])[0]
-
-            offset_size = 8
-            res = []
-            pos = 6
-            while pos < len(data):
-                res.append(struct.unpack('>Q', data[pos:pos + offset_size])[0])
-                pos += offset_size
-
-            assert len(res) <= count, 'Received more offsets than expected ({0} > {1})'.format(len(res), count)
-            kafka_log.debug('Received {0} offsets: {1}'.format(count, res))
-            
-            if callback:
-                return callback(res)
-            else:
-                return res
+        # Send the request. The logic for handling the response 
+        # is in _read_offset_response().
         
-        def continue3(raw_buf_length):
-            buf_length = struct.unpack('>I', raw_buf_length)[0]
-            return self._read(buf_length, continue4)
-        
-        def continue2():
-            return self._read(4, continue3)
-        
-        def continue1():
-            return self._write(request, continue2)
+        return self._write(request_size, 
+            partial(self._wrote_request_size, request, 
+                partial(self._read_offset_response, callback)))
 
-        return self._write(request_size, continue1)
         
     # Helper methods
     
@@ -201,6 +136,59 @@ class BaseKafka(object):
         return payload
 
     # Private methods
+
+    # Response decoding methods
+    
+    def _read_fetch_response(self, callback, start_offset, message_set):
+        messages  = []
+
+        if message_set:
+            processed = 0
+            length    = len(message_set) - 4 # Hmm, not sure why it's - 4
+            assert length > 0
+
+            message_index = 0
+            while (processed <= length):
+                message_size_offset = processed + 4
+                raw_message_size = message_set[processed:message_size_offset]
+                message_size = struct.unpack('!I', raw_message_size)[0]
+
+                assert message_size < len(message_set), message_size
+
+                message_offset = message_size_offset + message_size
+                raw_message = message_set[processed:message_offset]
+                message = self.decode_message(raw_message)
+                kafka_log.debug('message {1}: {2} ({0} bytes)'.format(message_size, message_index, message))
+
+                offset_delta = 4 + message_size
+                processed += offset_delta
+
+                messages.append((start_offset + processed, message))
+                message_index += 1
+
+        if callback:
+            return callback(messages)
+        else:
+            return messages
+
+    def _read_offset_response(self, callback, data):
+        # The number of offsets received (4 byte unsigned int)
+        count = struct.unpack('>L', data[0:4])[0]
+
+        offset_size = 8
+        res = []
+        pos = 4
+        while pos < len(data):
+            res.append(struct.unpack('>Q', data[pos:pos + offset_size])[0])
+            pos += offset_size
+
+        assert len(res) <= count, 'Received more offsets than expected ({0} > {1})'.format(len(res), count)
+        kafka_log.debug('Received {0} offsets: {1}'.format(count, res))
+
+        if callback:
+            return callback(res)
+        else:
+            return res
     
     # Request encoding methods
     
@@ -278,7 +266,28 @@ class BaseKafka(object):
             *offsets_request)
 
         return bin_request_size, bin_request
+
+    # Request/response protocol
+    def _wrote_request_size(self, request, callback):
+        return self._write(request, partial(self._wrote_request, callback))
+
+    def _wrote_request(self, callback):
+        # Read the first 4 bytes, which is the response size (unsigned int)
+        return self._read(4, partial(self._read_response_size, callback))
+
+    def _read_response_size(self, callback, raw_buf_length):
+        buf_length = struct.unpack('>I', raw_buf_length)[0]
+        kafka_log.info('response: {0} bytes'.format(buf_length))
+        return self._read(buf_length, 
+            partial(self._read_response, callback))
     
+    def _read_response(self, callback, data):
+        # Check if there is a non zero error code (2 byte unsigned int):
+        error_code = struct.unpack('>H', data[0:2])[0]
+        if error_code != 0:
+            raise error_codes.get(error_code, UnknownError)('Code: {0}'.format(error_code))
+        else:
+            return callback(data[2:])
     
     # Socket management methods
     
