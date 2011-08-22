@@ -1,7 +1,7 @@
 import array
 import socket
 
-from kafka.base import BaseKafka, logging, StringIO
+from kafka.base import BaseKafka, logging, StringIO, ConnectionFailure
 socket_log = logging.getLogger('kafka.iostream')
 
 from tornado.iostream import IOStream

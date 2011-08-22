@@ -1,7 +1,7 @@
 import logging
 import time
 import unittest
-from kafka import Kafka, LATEST_OFFSET, EARLIEST_OFFSET
+from kafka import Kafka, LATEST_OFFSET, EARLIEST_OFFSET, ConnectionFailure
 from kafka.nonblocking import KafkaTornado
 
 try:
@@ -10,10 +10,13 @@ try:
 except ImportError:
     has_tornado = False
 
-class TestKafka(unittest.TestCase):
+def get_unique_topic(name):
+    return '{0}-{1}'.format(time.time(), name)
+
+class TestKafkaBlocking(unittest.TestCase):
     def test_kafka(self):
         kafka = Kafka()
-        topic = '{0}-test-kafka'.format(time.time())
+        topic = get_unique_topic('test-kafka')
         start_offset = 0
         
         input_messages = ['message0', 'message1', 'message2']
@@ -41,11 +44,20 @@ class TestKafka(unittest.TestCase):
         self.assertEquals(len(actual_earliest_offsets), 1)
         self.assertEquals(0, actual_earliest_offsets[0])
 
+    def test_cant_connect(self):
+        kafka = Kafka(host=str(time.time()))
+        topic = get_unique_topic('test-cant-connect')
+
+        self.assertRaises(ConnectionFailure, kafka.produce, topic, 
+            'wont appear')
+
+    
+
 if has_tornado:
     class TestKafkaTornado(AsyncTestCase, LogTrapTestCase):
         def test_kafka_tornado(self):
             kafka = KafkaTornado(io_loop=self.io_loop)
-            topic = '{0}-test-kafka-tornado'.format(time.time())
+            topic = get_unique_topic('test-kafka-tornado')
             start_offset = 0
 
             input_messages = ['message0', 'message1', 'message2']
@@ -78,6 +90,14 @@ if has_tornado:
             
             self.assertEquals(len(actual_earliest_offsets), 1)
             self.assertEquals(0, actual_earliest_offsets[0])            
+
+        def test_cant_connect(self):
+            kafka = KafkaTornado(host=str(time.time()), io_loop=self.io_loop)
+            topic = get_unique_topic('test-cant-connect')
+
+            self.assertRaises(ConnectionFailure, kafka.produce, topic, 
+                'wont appear')
+
 
 
 if __name__ == '__main__':
