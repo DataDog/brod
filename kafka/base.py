@@ -69,10 +69,12 @@ class BaseKafka(object):
     MAX_RETRY = 3
     DEFAULT_MAX_SIZE = 1024 * 1024
     
-    def __init__(self, host=None, port=None, max_size=None):
+    def __init__(self, host=None, port=None, max_size=None, 
+            include_corrupt=False):
         self.host   = host or 'localhost'
         self.port   = port or 9092
         self.max_size = max_size or self.DEFAULT_MAX_SIZE
+        self.include_corrupt = include_corrupt
     
     # Public API
     
@@ -92,7 +94,7 @@ class BaseKafka(object):
         # Send the request
         return self._write(request, callback)
     
-    def fetch(self, topic, offset, partition=None, max_size=None, callback=None):
+    def fetch(self, topic, offset, partition=None, max_size=None, callback=None, include_corrupt=False):
         """ Consume data from the topic queue. """
         
         # Clean up the input parameters
@@ -108,7 +110,8 @@ class BaseKafka(object):
         # is in _read_fetch_response().
         return self._write(fetch_request_size, 
             partial(self._wrote_request_size, fetch_request, 
-                partial(self._read_fetch_response, callback, offset)))
+                partial(self._read_fetch_response, callback, offset, 
+                    include_corrupt)))
 
     def offsets(self, topic, time_val, max_offsets, partition=None, callback=None):
         
@@ -137,9 +140,11 @@ class BaseKafka(object):
 
     # Response decoding methods
     
-    def _read_fetch_response(self, callback, start_offset, message_buffer):
+    def _read_fetch_response(self, callback, start_offset, include_corrupt, 
+            message_buffer):
         if message_buffer:
-            messages = self._parse_message_set(start_offset, message_buffer)
+            messages = self._parse_message_set(start_offset, message_buffer, 
+                include_corrupt)
         else:
             messages = []
 
@@ -148,7 +153,8 @@ class BaseKafka(object):
         else:
             return messages
 
-    def _parse_message_set(self, start_offset, message_buffer):
+    def _parse_message_set(self, start_offset, message_buffer, 
+            include_corrupt=False):
         offset = start_offset
         
         try:
@@ -187,19 +193,24 @@ class BaseKafka(object):
                 # Parse the payload (variable length string)
                 payload_length = message_length - Lengths.MAGIC - Lengths.CHECKSUM
                 payload = message_buffer.read(payload_length)
-                if len(payload) < payload_length:
+                if len(payload) < payload_length and not self.include_corrupt:
                     kafka_log.error('Unexpected end of message set. Expected {0} bytes for payload, only read {1}'.format(payload_length, len(payload)))
                     break
                 
                 actual_checksum = self.compute_checksum(payload)
                 if magic != MAGIC_BYTE:
                     kafka_log.error('Unexpected magic byte: {0} (expecting {1})'.format(magic, MAGIC_BYTE))
-                    # Don't yield the corrupt message
+                    corrupt = True
 
                 elif checksum != actual_checksum:
                     kafka_log.error('Checksum failure at offset {0}'.format(offset))
-                    # Don't yield the corrupt message
+                    corrupt = True
+                else:
+                    corrupt = False
 
+                if include_corrupt:
+                    kafka_log.debug('message {0}: (offset: {1}, {2} bytes, corrupt: {3})'.format(payload, offset, message_length, corrupt))
+                    yield offset, payload, corrupt
                 else:
                     kafka_log.debug('message {0}: (offset: {1}, {2} bytes)'.format(payload, offset, message_length))
 

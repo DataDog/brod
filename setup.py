@@ -4,7 +4,7 @@ import setuptools
 
 setuptools.setup(
   name = 'pykafka',
-  version = '2.2.0',
+  version = '2.3.0',
   license = 'MIT',
   description = open('README.md').read(),
   author = "Datadog, Inc.",
