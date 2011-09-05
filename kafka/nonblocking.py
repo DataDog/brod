@@ -64,4 +64,15 @@ class KafkaTornado(BaseKafka):
         if not self._stream:
             self._connect()
         
-        return self._stream.write(data, callback)
+        try:
+            return self._stream.write(data, callback)
+        except IOError:
+            if retries > 0:
+                self._stream = None
+                retries_left = retries - 1
+                socket_log.warn('Write failure, retrying ({0} retries left)'.format(retries_left))
+                return self._write(data, callback, retries_left)
+            else:
+                raise
+            
+            
