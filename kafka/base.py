@@ -2,6 +2,7 @@ import binascii
 import logging
 import struct
 import time
+import sys, traceback
 from cStringIO import StringIO
 from functools import partial
 
@@ -95,8 +96,22 @@ class BaseKafka(object):
         return self._write(request, callback)
     
     def fetch(self, topic, offset, partition=None, max_size=None, callback=None, include_corrupt=False):
-        """ Consume data from the topic queue. """
-        
+        """ Fetch messages from a kafka queue
+            
+            This will sequentially read and return all available messages 
+            starting at the specified offset and adding up to max_size bytes.
+            
+            Params:
+                topic:      kafka topic to read from
+                offset:     offset of the first message requested
+                partition:  topic partition to read from (optional)
+                max_size:   maximum size to read from the queue, 
+                            in bytes (optional)
+                
+            Returns:
+                a list: [(offset, message), ]
+        """
+
         # Clean up the input parameters
         topic = topic.encode('utf-8')
         partition = partition or 0
@@ -108,10 +123,15 @@ class BaseKafka(object):
         
         # Send the request. The logic for handling the response 
         # is in _read_fetch_response().
-        return self._write(fetch_request_size, 
-            partial(self._wrote_request_size, fetch_request, 
-                partial(self._read_fetch_response, callback, offset, 
-                    include_corrupt)))
+        return self._write(
+            fetch_request_size, 
+            partial(self._wrote_request_size, 
+                    fetch_request, 
+                    partial(self._read_fetch_response, 
+                            callback, 
+                            offset, 
+                            include_corrupt
+                            )))
 
     def offsets(self, topic, time_val, max_offsets, partition=None, callback=None):
         
@@ -143,8 +163,10 @@ class BaseKafka(object):
     def _read_fetch_response(self, callback, start_offset, include_corrupt, 
             message_buffer):
         if message_buffer:
-            messages = self._parse_message_set(start_offset, message_buffer, 
-                include_corrupt)
+            messages = list(self._parse_message_set(
+                start_offset, message_buffer, include_corrupt)
+            )
+            print "Parsed {0} messages".format(len(messages))
         else:
             messages = []
 
@@ -194,7 +216,9 @@ class BaseKafka(object):
                 payload_length = message_length - Lengths.MAGIC - Lengths.CHECKSUM
                 payload = message_buffer.read(payload_length)
                 if len(payload) < payload_length and not self.include_corrupt:
-                    kafka_log.error('Unexpected end of message set. Expected {0} bytes for payload, only read {1}'.format(payload_length, len(payload)))
+                    # This is not an error - this happens everytime we reach
+                    # the end of the read buffer without having parsed a complete msg
+                    # kafka_log.error('Unexpected end of message set. Expected {0} bytes for payload, only read {1}'.format(payload_length, len(payload)))
                     break
                 
                 actual_checksum = self.compute_checksum(payload)
@@ -213,8 +237,9 @@ class BaseKafka(object):
                     yield offset, payload, corrupt
                 else:
                     kafka_log.debug('message {0}: (offset: {1}, {2} bytes)'.format(payload, offset, message_length))
-
                     yield offset, payload
+        except:
+            kafka_log.error("Unexpected error:{0}".format(sys.exc_info()[0]))
         finally:
             message_buffer.close()
 
