@@ -15,6 +15,7 @@ class Kafka(BaseKafka):
         
         self._socket = None
         self._overflow = ''
+        self.total_read = 0
 
     # Socket management methods
     
@@ -45,33 +46,25 @@ class Kafka(BaseKafka):
         if self._socket is None:
             self._connect()
 
-        # Create a character array to act as the buffer.
-        buf         = array.array('c', ' ' * length)
         read_length = 0
-    
-        read_data_buf = StringIO()
-    
+        read_data = ''
+        
         try:
             socket_log.debug('recv: expected {0} bytes'.format(length))
-            while read_length < length:
-                chunk_size = self._socket.recv_into(buf, length)
-                chunk = buf.tostring()
-                read_data_buf.write(chunk[0:chunk_size])
-                read_length += chunk_size
-                socket_log.debug('recv: {0} ({1} bytes)'.format(repr(chunk), 
-                    chunk_size))
-
+            while read_length < length:            
+                chunk = self._socket.recv(length)
+                read_length = read_length + len(chunk)
+                read_data = read_data + chunk
+                self.total_read += read_length
         except errno.EAGAIN:
             self.disconnect()
             raise IOError("Timeout reading from the socket.")
         else:
-            read_data = read_data_buf.getvalue()
             socket_log.info('recv: {0} bytes total'.format(len(read_data)))
             output = self._overflow + read_data[0:length]
             self._overflow = read_data[length:]
       
             return callback(output)
-
 
     def _write(self, data, callback=None, retries=BaseKafka.MAX_RETRY):
         """ Write `data` to the remote Kafka server. """
