@@ -166,7 +166,6 @@ class BaseKafka(object):
             messages = list(self._parse_message_set(
                 start_offset, message_buffer, include_corrupt)
             )
-            print "Parsed {0} messages".format(len(messages))
         else:
             messages = []
 
@@ -321,7 +320,7 @@ class BaseKafka(object):
 
         # Send the fetch request
         bin_format = '<<uint:4, uint:2, uint:2, str:{0}, uint:4, uint:8, uint:4>>'.format(topic_length)
-        kafka_log.info('fetch request: {0} in format {1} ({2} bytes)'.format(request, bin_format, request_size))
+        # kafka_log.info('fetch request: {0} in format {1} ({2} bytes)'.format(request, bin_format, request_size))
         
         bin_request_size = struct.pack('>I', request_size)
         bin_request = struct.pack('>HH%dsIQI' % topic_length, *request)
@@ -347,7 +346,7 @@ class BaseKafka(object):
         )
         
         bin_format = '<<uint:4, uint:2, uint:2, str:{0}, uint:4, int:8, uint:4>>'.format(len(topic))
-        kafka_log.debug('Fetching offsets for {0}-{1}, time: {2}, max_offsets: {3} in format {5} ({4} bytes)'.format(topic, partition, time_val, max_offsets, offsets_request_size, bin_format))
+        # kafka_log.debug('Fetching offsets for {0}-{1}, time: {2}, max_offsets: {3} in format {5} ({4} bytes)'.format(topic, partition, time_val, max_offsets, offsets_request_size, bin_format))
 
         bin_request_size = struct.pack('>I', offsets_request_size)
         bin_request = struct.pack('>HH{0}sIqI'.format(len(topic)), 
@@ -366,7 +365,7 @@ class BaseKafka(object):
 
     def _read_response_size(self, callback, raw_buf_length):
         buf_length = struct.unpack('>I', raw_buf_length)[0]
-        kafka_log.info('response: {0} bytes'.format(buf_length))
+        # kafka_log.info('response: {0} bytes'.format(buf_length))
         return self._read(buf_length, 
             partial(self._read_response, callback))
     

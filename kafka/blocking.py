@@ -50,7 +50,7 @@ class Kafka(BaseKafka):
         read_data = ''
         
         try:
-            socket_log.debug('recv: expected {0} bytes'.format(length))
+            # socket_log.debug('recv: expected {0} bytes'.format(length))
             while read_length < length:            
                 chunk = self._socket.recv(length)
                 read_length = read_length + len(chunk)
@@ -60,7 +60,7 @@ class Kafka(BaseKafka):
             self.disconnect()
             raise IOError("Timeout reading from the socket.")
         else:
-            socket_log.info('recv: {0} bytes total'.format(len(read_data)))
+            # socket_log.info('recv: {0} bytes total'.format(len(read_data)))
             output = self._overflow + read_data[0:length]
             self._overflow = read_data[length:]
       
@@ -82,7 +82,7 @@ class Kafka(BaseKafka):
             wrote_length = 0
 
             while write_length > wrote_length:
-                socket_log.info('send: {0}'.format(repr(data)))
+                # socket_log.info('send: {0}'.format(repr(data)))
                 wrote_length += self._socket.send(data)
 
         except (errno.ECONNRESET, errno.EPIPE, errno.ECONNABORTED):
