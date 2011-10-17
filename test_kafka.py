@@ -146,6 +146,7 @@ class TestTopic(unittest.TestCase):
         self.assertEqual(status.messages_read, 3)
         self.assertEqual(status.bytes_read, 14)
         self.assertEqual(status.num_fetches, 1)
+        self.assertEqual(messages, ['Rusty', 'Patty', 'Jack'])
         self.assertRaises(StopIteration, dogs.next)
     
         
