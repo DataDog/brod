@@ -4,6 +4,8 @@ import struct
 import time
 import sys, traceback
 from cStringIO import StringIO
+from collections import namedtuple
+from datetime import datetime
 from functools import partial
 
 __all__ = [
@@ -14,6 +16,7 @@ __all__ = [
     'WrongPartitionCode',
     'InvalidRetchSizeCode',
     'UnknownError',
+    'InvalidOffset',
     'PRODUCE_REQUEST',
     'FETCH_REQUEST',
     'OFFSETS_REQUEST',
@@ -29,6 +32,7 @@ class InvalidMessageCode(KafkaError): pass
 class WrongPartitionCode(KafkaError): pass
 class InvalidRetchSizeCode(KafkaError): pass
 class UnknownError(KafkaError): pass
+class InvalidOffset(KafkaError): pass
 
 error_codes = {
     1: OffsetOutOfRange,
@@ -396,5 +400,170 @@ class BaseKafka(object):
 
     def _write(self, data, callback=None, retries=MAX_RETRY):
         raise NotImplementedError()
+
+    def topic(self, topic, partition=None):
+        """Return a Topic object that knows how to iterate through messages
+        in a topic/partition."""
+        return Topic(self, topic, partition)
+
+
+# By David Ormsbee (dave@datadog.com):
+class Topic(object):
+    """A higher level abstraction over the Kafka object to make dealing with
+    Topics a little easier. Currently only serves to read from a topic.
+    
+    This class has not been properly tested with the non-blocking KafkaTornado.
+    """
+    PollingStatus = namedtuple('PollingStatus', 
+                               'start_offset next_offset last_offset_read ' +
+                               'messages_read bytes_read num_fetches ' +
+                               'polling_start_time')
+    
+    def __init__(self, kafka, topic, partition=None):
+        self._kafka = kafka
+        self._topic = topic
+        self._partition = partition
+
+    def earliest_offset(self):
+        """Return the first offset we have a message for."""
+        return self._kafka.offsets(self._topic, EARLIEST_OFFSET, max_offsets=1,
+                                   partition=self._partition)[0]
+    
+    def latest_offset(self):
+        """Return the latest offset we can request. Note that this is the offset
+        *after* the last known message in the queue. The offset this method 
+        returns will not have a message in it at the time you call it, but it's
+        where the next message *will* be placed, whenever it arrives."""
+        return self._kafka.offsets(self._topic, LATEST_OFFSET, max_offsets=1,
+                                   partition=self._partition)[0]
+    
+    # FIXME DO: Put callback in
+    # Topic should have it's own fetch() with the basic stuff pre-filled
+    def poll(self, 
+             offset=None,
+             end_offset=None,
+             poll_interval=1,
+             max_size=None,
+             include_corrupt=False):
+        """Poll and iterate through messages from a Kafka queue.
+
+        Params (all optional):
+            offset:     Offset of the first message requested. Defaults to the
+                        earliest available offset.
+            end_offset: Offset of the last message requested. We will return 
+                        the message that corresponds to end_offset, and then
+                        stop.
+            poll_interval: How many seconds to pause between polling
+            max_size:   maximum size to read from the queue, in bytes
+            include_corrupt: 
+        
+        This is a generator that will yield (state, messages) pairs, where state
+        is a Reader.ReaderState showing the work done to date by this Reader,
+        and messages is a list of strs representing all available messages at 
+        this time for the topic and partition this Reader was initialied with.
+        
+        By default, the generator will pause for 1 second between polling for
+        more messages.
+        
+        Example:
+        
+            dog_queue = Kafka().topic('good_dogs')
+            for status, messages in dog_queue.poll(offset, poll_interval=5):
+                for message in messages:
+                    dog, bark = parse_barking(message)
+                    print "{0} barked: {1}!".format(dog, bark)
+                print "Count of barks received: {0}".format(status.messages_read)
+                print "Total barking received: {0}".format(status.bytes_read)
+        
+        Note that this method assumes we can increment the offset by knowing the
+        last read offset, the last read message size, and the header size. This
+        will change if compression ever gets implemented and the header format
+        changes: https://issues.apache.org/jira/browse/KAFKA-79
+        """
+        # Kafka msg headers are 9 bytes: 4=len(msg), 1=magic val, 4=CRC
+        MESSAGE_HEADER_SIZE = 9
+
+        # Init for first run
+        first_loop = True
+        offset = offset if offset is not None else self.earliest_offset()
+        start_offset = offset # Offset this polling began at.
+        last_offset_read = None # The offset of the last message we returned
+        messages_read = 0 # How many messages have we read from the stream?
+        bytes_read = 0 # Total number of bytes read from the stream?
+        num_fetches = 0 # Number of times we've called fetch()
+        polling_start_time = datetime.now()
+
+        # Shorthand fetch call alias with everything filled in except offset
+        # The return from a call to fetch is list of (offset, msg) tuples that 
+        # look like: [(0, 'Rusty'), (14, 'Patty'), (28, 'Jack'), (41, 'Clyde')]
+        fetch_messages = partial(self._kafka.fetch,
+                                 self._topic,
+                                 partition=self._partition,
+                                 max_size=max_size,
+                                 callback=None,
+                                 include_corrupt=include_corrupt)
+        while True:
+            if end_offset is not None and offset > end_offset:
+                break
+            try:
+                # Filter out the messages that are past our end_offset
+                msg_batch = [(msg_offset, msg) 
+                             for msg_offset, msg in fetch_messages(offset)
+                             if msg_offset <= end_offset]
+            except OffsetOutOfRange:
+                # Catching and re-raising this with more helpful info.
+                raise OffsetOutOfRange("Offset {offset} is out of range for " +
+                                       "topic {topic}, partition {partition} " + 
+                                       "(earliest: {earliest}, latest: {latest})"
+                                       .format(offset=offset,
+                                               topic=self._topic,
+                                               partition=self._partition,
+                                               earliest=self.earliest_offset(),
+                                               latest=self.latest_offset()))
+
+            # For the first loop only, if nothing came back from the batch, make
+            # sure that the offset we're asking for is a valid one. Right
+            # now, Kafka.fetch() will just silently return an empty list if an
+            # invalid-but-in-plausible-range offset is requested. We assume that
+            # if we get past the first loop, we're ok, because we don't want to
+            # constantly call earliest/latest_offset() (they're network calls)
+            if first_loop and not msg_batch:
+                # If we're not at the latest available offset, then a call to 
+                # fetch should return us something if it's valid. We have to 
+                # make another fetch here because there's a chance 
+                # latest_offset() could have moved since the last fetch.
+                if self.earliest_offset() <= offset < self.latest_offset() and \
+                   not fetch_messages(offset):
+                    raise InvalidOffset("No message at offset {0}".format(offset))
+            first_loop = False
+
+            # Our typical processing...
+            messages = [msg for msg_offset, msg in msg_batch]
+            messages_read += len(messages)
+            bytes_read += sum(len(msg) for msg in messages)
+            num_fetches += 1
+
+            if msg_batch:
+                last_offset_read, last_message_read = msg_batch[-1]
+                offset = last_offset_read + len(last_message_read) + \
+                         MESSAGE_HEADER_SIZE
+
+            state = Topic.PollingStatus(start_offset=start_offset,
+                                        next_offset=offset,
+                                        last_offset_read=last_offset_read,
+                                        messages_read=messages_read,
+                                        bytes_read=bytes_read,
+                                        num_fetches=num_fetches,
+                                        polling_start_time=polling_start_time)
+        
+            yield state, messages # messages is a list of strs
+        
+            if poll_interval:
+                time.sleep(1)
+
+
+
+
+
 
 

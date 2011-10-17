@@ -4,7 +4,9 @@ import unittest
 from kafka import (
     Kafka, 
     LATEST_OFFSET, EARLIEST_OFFSET, Lengths, 
-    ConnectionFailure
+    ConnectionFailure,
+    OffsetOutOfRange,
+    InvalidOffset,
 )
 
 from kafka.nonblocking import KafkaTornado
@@ -109,6 +111,44 @@ if has_tornado:
                 'wont appear')
 
 
+class TestTopic(unittest.TestCase):
+    # Contents of self.dogs_queue after setUp:
+    #   [(0, 'Rusty'), (14, 'Patty'), (28, 'Jack'), (41, 'Clyde')]
+    
+    def setUp(self):
+        self.k = Kafka()
+        self.topic_name = get_unique_topic('test-kafka-topic')
+        input_messages = ['Rusty', 'Patty', 'Jack', 'Clyde']
+        self.k.produce(self.topic_name, input_messages)
+        
+        # If you don't do this sleep, then you can get into a condition where
+        # a fetch immediately after a produce will cause a state where the 
+        # produce is duplicated (it really gets that way in Kafka).
+        time.sleep(1)
+        self.dogs_queue = self.k.topic(self.topic_name)
+        
+        # print list(self.k.fetch(self.topic_name, 0))
+        # print self.topic_name
+        
+    
+    def test_offset_queries(self):
+        self.assertEqual(self.dogs_queue.earliest_offset(), 0)
+        self.assertEqual(self.dogs_queue.latest_offset(), 55)
+        self.assertRaises(OffsetOutOfRange, self.dogs_queue.poll(100).next)
+        self.assertRaises(InvalidOffset, self.dogs_queue.poll(22).next)
+
+    def test_end_offset_iteration(self):
+        dogs = self.dogs_queue.poll(end_offset=28, poll_interval=None)
+        status, messages = dogs.next()
+        self.assertEqual(status.start_offset, 0)
+        self.assertEqual(status.next_offset, 41)
+        self.assertEqual(status.last_offset_read, 28)
+        self.assertEqual(status.messages_read, 3)
+        self.assertEqual(status.bytes_read, 14)
+        self.assertEqual(status.num_fetches, 1)
+        self.assertRaises(StopIteration, dogs.next)
+    
+        
 
 if __name__ == '__main__':
     logging.basicConfig(
