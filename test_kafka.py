@@ -138,7 +138,7 @@ class TestTopic(unittest.TestCase):
         self.assertRaises(InvalidOffset, self.dogs_queue.poll(22).next)
 
     def test_end_offset_iteration(self):
-        dogs = self.dogs_queue.poll(end_offset=28, poll_interval=None)
+        dogs = self.dogs_queue.poll(0, end_offset=28, poll_interval=None)
         status, messages = dogs.next()
         self.assertEqual(status.start_offset, 0)
         self.assertEqual(status.next_offset, 41)

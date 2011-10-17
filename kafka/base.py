@@ -440,7 +440,7 @@ class Topic(object):
     # FIXME DO: Put callback in
     # Topic should have it's own fetch() with the basic stuff pre-filled
     def poll(self, 
-             offset=None,
+             offset,
              end_offset=None,
              poll_interval=1,
              max_size=None,
@@ -448,8 +448,7 @@ class Topic(object):
         """Poll and iterate through messages from a Kafka queue.
 
         Params (all optional):
-            offset:     Offset of the first message requested. Defaults to the
-                        earliest available offset.
+            offset:     Offset of the first message requested.
             end_offset: Offset of the last message requested. We will return 
                         the message that corresponds to end_offset, and then
                         stop.
@@ -485,7 +484,6 @@ class Topic(object):
 
         # Init for first run
         first_loop = True
-        offset = offset if offset is not None else self.earliest_offset()
         start_offset = offset # Offset this polling began at.
         last_offset_read = None # The offset of the last message we returned
         messages_read = 0 # How many messages have we read from the stream?
