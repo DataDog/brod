@@ -456,10 +456,11 @@ class Topic(object):
             max_size:   maximum size to read from the queue, in bytes
             include_corrupt: 
         
-        This is a generator that will yield (state, messages) pairs, where state
-        is a Reader.ReaderState showing the work done to date by this Reader,
-        and messages is a list of strs representing all available messages at 
-        this time for the topic and partition this Reader was initialied with.
+        This is a generator that will yield (status, messages) pairs, where
+        status is a Topic.PollingStatus showing the work done to date by this
+        Topic, and messages is a list of strs representing all available
+        messages at this time for the topic and partition this Topic was
+        initialized with.
         
         By default, the generator will pause for 1 second between polling for
         more messages.
@@ -546,15 +547,15 @@ class Topic(object):
                 offset = last_offset_read + len(last_message_read) + \
                          MESSAGE_HEADER_SIZE
 
-            state = Topic.PollingStatus(start_offset=start_offset,
-                                        next_offset=offset,
-                                        last_offset_read=last_offset_read,
-                                        messages_read=messages_read,
-                                        bytes_read=bytes_read,
-                                        num_fetches=num_fetches,
-                                        polling_start_time=polling_start_time)
+            status = Topic.PollingStatus(start_offset=start_offset,
+                                         next_offset=offset,
+                                         last_offset_read=last_offset_read,
+                                         messages_read=messages_read,
+                                         bytes_read=bytes_read,
+                                         num_fetches=num_fetches,
+                                         polling_start_time=polling_start_time)
         
-            yield state, messages # messages is a list of strs
+            yield status, messages # messages is a list of strs
         
             if poll_interval:
                 time.sleep(poll_interval)
