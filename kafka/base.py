@@ -559,7 +559,7 @@ class Topic(object):
             yield state, messages # messages is a list of strs
         
             if poll_interval:
-                time.sleep(1)
+                time.sleep(poll_interval)
 
 
 
