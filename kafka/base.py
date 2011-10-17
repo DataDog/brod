@@ -512,9 +512,9 @@ class Topic(object):
                              if msg_offset <= end_offset]
             except OffsetOutOfRange:
                 # Catching and re-raising this with more helpful info.
-                raise OffsetOutOfRange("Offset {offset} is out of range for " +
+                raise OffsetOutOfRange(("Offset {offset} is out of range for " +
                                        "topic {topic}, partition {partition} " + 
-                                       "(earliest: {earliest}, latest: {latest})"
+                                       "(earliest: {earliest}, latest: {latest})")
                                        .format(offset=offset,
                                                topic=self._topic,
                                                partition=self._partition,
