@@ -506,9 +506,12 @@ class Topic(object):
                 break
             try:
                 # Filter out the messages that are past our end_offset
-                msg_batch = [(msg_offset, msg) 
-                             for msg_offset, msg in fetch_messages(offset)
-                             if msg_offset <= end_offset]
+                msg_batch = fetch_messages(offset)
+                if end_offset is not None:
+                    msg_batch = [(msg_offset, msg) 
+                                 for msg_offset, msg in msg_batch
+                                 if msg_offset <= end_offset]
+                
             except OffsetOutOfRange:
                 # Catching and re-raising this with more helpful info.
                 raise OffsetOutOfRange(("Offset {offset} is out of range for " +
