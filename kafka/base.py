@@ -402,22 +402,27 @@ class BaseKafka(object):
         raise NotImplementedError()
 
     def topic(self, topic, partition=None):
-        """Return a Topic object that knows how to iterate through messages
+        """Return a Partition object that knows how to iterate through messages
         in a topic/partition."""
-        return Topic(self, topic, partition)
+        return Partition(self, topic, partition)
+
+    def partition(self, topic, partition=None):
+        """Return a Partition object that knows how to iterate through messages
+        in a topic/partition."""
+        return Partition(self, topic, partition)
 
 
 # By David Ormsbee (dave@datadog.com):
-class Topic(object):
+class Partition(object):
     """A higher level abstraction over the Kafka object to make dealing with
-    Topics a little easier. Currently only serves to read from a topic.
+    Partitions a little easier. Currently only serves to read from a topic.
     
     This class has not been properly tested with the non-blocking KafkaTornado.
     """
     PollingStatus = namedtuple('PollingStatus', 
                                'start_offset next_offset last_offset_read ' +
                                'messages_read bytes_read num_fetches ' +
-                               'polling_start_time')
+                               'polling_start_time seconds_slept')
     
     def __init__(self, kafka, topic, partition=None):
         self._kafka = kafka
@@ -438,9 +443,9 @@ class Topic(object):
                                    partition=self._partition)[0]
     
     # FIXME DO: Put callback in
-    # Topic should have it's own fetch() with the basic stuff pre-filled
+    # Partition should have it's own fetch() with the basic stuff pre-filled
     def poll(self, 
-             offset,
+             offset=None,
              end_offset=None,
              poll_interval=1,
              max_size=None,
@@ -455,11 +460,12 @@ class Topic(object):
             poll_interval: How many seconds to pause between polling
             max_size:   maximum size to read from the queue, in bytes
             include_corrupt: 
+            
         
         This is a generator that will yield (status, messages) pairs, where
-        status is a Topic.PollingStatus showing the work done to date by this
-        Topic, and messages is a list of strs representing all available
-        messages at this time for the topic and partition this Topic was
+        status is a Partition.PollingStatus showing the work done to date by this
+        Partition, and messages is a list of strs representing all available
+        messages at this time for the topic and partition this Partition was
         initialized with.
         
         By default, the generator will pause for 1 second between polling for
@@ -485,11 +491,12 @@ class Topic(object):
 
         # Init for first run
         first_loop = True
-        start_offset = offset # Offset this polling began at.
+        start_offset = self.latest_offset() if offset is None else offset
         last_offset_read = None # The offset of the last message we returned
         messages_read = 0 # How many messages have we read from the stream?
         bytes_read = 0 # Total number of bytes read from the stream?
         num_fetches = 0 # Number of times we've called fetch()
+        seconds_slept = 0
         polling_start_time = datetime.now()
 
         # Shorthand fetch call alias with everything filled in except offset
@@ -550,18 +557,22 @@ class Topic(object):
                 offset = last_offset_read + len(last_message_read) + \
                          MESSAGE_HEADER_SIZE
 
-            status = Topic.PollingStatus(start_offset=start_offset,
+            status = Partition.PollingStatus(start_offset=start_offset,
                                          next_offset=offset,
                                          last_offset_read=last_offset_read,
                                          messages_read=messages_read,
                                          bytes_read=bytes_read,
                                          num_fetches=num_fetches,
-                                         polling_start_time=polling_start_time)
+                                         polling_start_time=polling_start_time,
+                                         seconds_slept=seconds_slept)
         
             yield status, messages # messages is a list of strs
         
-            if poll_interval:
+            # We keep grabbing as often as we can until we run out, after which
+            # we start sleeping between calls until we see more.
+            if poll_interval and not messages:
                 time.sleep(poll_interval)
+                seconds_slept += poll_interval
 
 
 
