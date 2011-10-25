@@ -58,8 +58,11 @@ class Kafka(BaseKafka):
                 read_data = read_data + chunk
                 self.total_read += read_length
         except errno.EAGAIN:
-            self.disconnect()
+            self._disconnect()
             raise IOError("Timeout reading from the socket.")
+        except IOError:
+            self._disconnect()
+            raise
         else:
             # socket_log.info('recv: {0} bytes total'.format(len(read_data)))
             output = self._overflow + read_data[0:length]

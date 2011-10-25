@@ -516,13 +516,14 @@ class Partition(object):
             try:
                 msg_batch = fetch_messages(offset)
                 retry_attempts = 0 # resets after every successful fetch
-            except ConnectionFailure as ex:
+            except (ConnectionFailure, IOError) as ex:
                 if retry_limit is not None and retry_attempts > retry_limit:
                     kafka_log.exception(ex)
                     raise
                 else:
                     time.sleep(poll_interval)
                     retry_attempts += 1
+                    # kafka_log.exception(ex)
                     kafka_log.error("Retry #{0} for fetch of topic {1}, offset {2}"
                                     .format(retry_attempts, self._topic, offset))
                     continue
