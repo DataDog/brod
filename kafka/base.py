@@ -449,7 +449,8 @@ class Partition(object):
              end_offset=None,
              poll_interval=1,
              max_size=None,
-             include_corrupt=False):
+             include_corrupt=False,
+             retry_limit=3):
         """Poll and iterate through messages from a Kafka queue.
 
         Params (all optional):
@@ -473,7 +474,7 @@ class Partition(object):
         
         Example:
         
-            dog_queue = Kafka().topic('good_dogs')
+            dog_queue = Kafka().partition('good_dogs')
             for status, messages in dog_queue.poll(offset, poll_interval=5):
                 for message in messages:
                     dog, bark = parse_barking(message)
@@ -508,17 +509,23 @@ class Partition(object):
                                  max_size=max_size,
                                  callback=None,
                                  include_corrupt=include_corrupt)
+        retry_attempts = 0
         while True:
             if end_offset is not None and offset > end_offset:
                 break
             try:
-                # Filter out the messages that are past our end_offset
                 msg_batch = fetch_messages(offset)
-                if end_offset is not None:
-                    msg_batch = [(msg_offset, msg) 
-                                 for msg_offset, msg in msg_batch
-                                 if msg_offset <= end_offset]
-                
+                retry_attempts = 0 # resets after every successful fetch
+            except ConnectionFailure as ex:
+                if retry_limit is not None and retry_attempts > retry_limit:
+                    kafka_log.exception(ex)
+                    raise
+                else:
+                    time.sleep(poll_interval)
+                    retry_attempts += 1
+                    kafka_log.error("Retry #{0} for fetch of topic {1}, offset {2}"
+                                    .format(retry_attempts, self._topic, offset))
+                    continue
             except OffsetOutOfRange:
                 # Catching and re-raising this with more helpful info.
                 raise OffsetOutOfRange(("Offset {offset} is out of range for " +
@@ -529,6 +536,11 @@ class Partition(object):
                                                partition=self._partition,
                                                earliest=self.earliest_offset(),
                                                latest=self.latest_offset()))
+
+            # Filter out the messages that are past our end_offset
+            if end_offset is not None:
+               msg_batch = [(msg_offset, msg) for msg_offset, msg in msg_batch
+                            if msg_offset <= end_offset]
 
             # For the first loop only, if nothing came back from the batch, make
             # sure that the offset we're asking for is a valid one. Right
@@ -558,13 +570,13 @@ class Partition(object):
                          MESSAGE_HEADER_SIZE
 
             status = Partition.PollingStatus(start_offset=start_offset,
-                                         next_offset=offset,
-                                         last_offset_read=last_offset_read,
-                                         messages_read=messages_read,
-                                         bytes_read=bytes_read,
-                                         num_fetches=num_fetches,
-                                         polling_start_time=polling_start_time,
-                                         seconds_slept=seconds_slept)
+                                             next_offset=offset,
+                                             last_offset_read=last_offset_read,
+                                             messages_read=messages_read,
+                                             bytes_read=bytes_read,
+                                             num_fetches=num_fetches,
+                                             polling_start_time=polling_start_time,
+                                             seconds_slept=seconds_slept)
         
             yield status, messages # messages is a list of strs
         

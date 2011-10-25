@@ -26,6 +26,7 @@ class Kafka(BaseKafka):
         try:
             self._socket.connect((self.host, self.port))
         except Exception, e:
+            self._socket = None
             raise ConnectionFailure("Could not connect to kafka at {0}:{1}".format(self.host, self.port))
 
     def _disconnect(self):
