@@ -89,13 +89,18 @@ class Kafka(BaseKafka):
                 # socket_log.info('send: {0}'.format(repr(data)))
                 wrote_length += self._socket.send(data)
 
-        except (errno.ECONNRESET, errno.EPIPE, errno.ECONNABORTED):
-            # Retry once.
-            self._reconnect()
-            if retries > 0:
-                return self._write(data, callback, retries - 1)
+        except socket.error, e:
+            if e.errno in [errno.ECONNRESET, errno.EPIPE, errno.ECONNABORTED]:
+                # Retry once.
+                self._reconnect()
+                if retries > 0:
+                    retries -= 1
+                    socket_log.warn("Socket error (%s), reconnecting (%s retries left)" % (str(e), retries))
+                    return self._write(data, callback, retries)
+                else:
+                    raise MaxRetries()
             else:
-                raise MaxRetries()
+                raise
         else:
             return callback()
     
