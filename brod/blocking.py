@@ -2,8 +2,8 @@ import array
 import errno
 import socket
 
-from kafka.base import BaseKafka, logging, StringIO, ConnectionFailure
-socket_log = logging.getLogger('kafka.socket')
+from brod.base import BaseKafka, logging, StringIO, ConnectionFailure
+socket_log = logging.getLogger('brod.socket')
 
 __all__ = [
     'Kafka',
