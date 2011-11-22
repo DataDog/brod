@@ -21,7 +21,6 @@ class Kafka(BaseKafka):
     
     def _connect(self):
         """ Connect to the Kafka server. """
-
         self._socket = socket.socket()
         try:
             self._socket.connect((self.host, self.port))
