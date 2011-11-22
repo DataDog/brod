@@ -14,7 +14,7 @@ __all__ = [
     'OffsetOutOfRange',
     'InvalidMessageCode',
     'WrongPartitionCode',
-    'InvalidRetchSizeCode',
+    'InvalidFetchSizeCode',
     'UnknownError',
     'InvalidOffset',
     'PRODUCE_REQUEST',
@@ -30,7 +30,7 @@ class ConnectionFailure(KafkaError): pass
 class OffsetOutOfRange(KafkaError): pass
 class InvalidMessageCode(KafkaError): pass
 class WrongPartitionCode(KafkaError): pass
-class InvalidRetchSizeCode(KafkaError): pass
+class InvalidFetchSizeCode(KafkaError): pass
 class UnknownError(KafkaError): pass
 class InvalidOffset(KafkaError): pass
 
@@ -38,7 +38,7 @@ error_codes = {
     1: OffsetOutOfRange,
     2: InvalidMessageCode,
     3: WrongPartitionCode,
-    4: InvalidRetchSizeCode,
+    4: InvalidFetchSizeCode,
 }
 
 PRODUCE_REQUEST      = 0
