@@ -32,8 +32,9 @@ Some really high level takeaways to get started:
   pulled from. The broker does not keep track of what the client has read. More
   advanced setups use ZooKeeper to help with this tracking, but that is 
   currently beyond the scope of this document.
-* The protocol is a work in progress, and new point releases can introduce
-  backwards incompatibile changes.
+* The protocol 
+  `is a work in progress <https://cwiki.apache.org/confluence/display/KAFKA/New+Wire+Format+Proposal>`_,
+  and new point releases can introduce backwards incompatibile changes.
 * The broker runs on port 9092 by default.
 
 
@@ -63,8 +64,8 @@ All requests must start with the following header::
     TOPIC_LENGTH   = int(2) // Length in bytes of the topic name
 
     TOPIC = String // Topic name, ASCII, not null terminated
-                   // This becomes the name of a directory, so no chars that 
-                   // would be illegal on the filesystem.
+                   // This becomes the name of a directory on the broker, so no 
+                   // chars that would be illegal on the filesystem.
 
     PARTITION = int(4) // Partition to act on. Number of available partitions is 
                        // controlled by broker config. Partition numbering 
@@ -199,13 +200,13 @@ To produce messages from the client and send to Kafka, use the following format:
      0                   1                   2                   3
      0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    /                       REQUEST HEADER (above)                  /
+    /                         REQUEST HEADER                        /
     /                                                               /
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
     |                         MESSAGES_LENGTH                       |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
     /                                                               /
-    /                           MESSAGES                            /
+    /                            MESSAGES                           /
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
     MESSAGES_LENGTH = int(4) // Length in bytes of the MESSAGES section
@@ -219,6 +220,8 @@ if the produce was successful or not. This is
 Multi-Produce
 *************
 
+FIXME: Need to implement and document
+
 Fetch
 *****
 Reading messages from a specific topic/partition combination.
@@ -228,13 +231,13 @@ Request to send to the broker::
      0                   1                   2                   3
      0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    /                           REQUEST HEADER                      /
+    /                         REQUEST HEADER                        /
     /                                                               /
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |                               OFFSET                          |
+    |                             OFFSET                            |
     |                                                               |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |                              MAX_SIZE                         |
+    |                            MAX_SIZE                           |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
     REQUEST_HEADER = See REQUEST_HEADER above
@@ -275,8 +278,8 @@ Normal, but possibly unexpected behavior:
   partition, it will send you the appropriate headers followed by a 300K chunk
   worth of the message log. If 300K ends in the middle of a message, you get 
   half a message at the end. If it ends halfway through a message header, you 
-  get a broken header. This is not an error, so be prepared to deal with the 
-  situation.
+  get a broken header. This is not an error, this is Kafka pushing complexity 
+  outward to the client to make the broker simple and fast. 
 * Kafka stores its messages in log files of a configurable size (512MB by
   default) called segments. A fetch of messages will not cross the segment 
   boundary to read from multiple files. So if you ask for a fetch of 300K's 
@@ -291,17 +294,44 @@ Normal, but possibly unexpected behavior:
 Multi-Fetch
 ***********
 
+FIXME: Need to implement and document.
+
 Offsets
 *******
-FIXME: Put what it actually does here just as soon as we can understand it.
 
-This one can be really deceptive. It is *not* a way to get the 
-`offset that occurred at a specific time <https://issues.apache.org/jira/browse/KAFKA-87>`_.
-Given special values for time, it can return you the earliest (-2) or latest 
-(-1) offset for a topic/partition. Given any other time, it returns the offset
-of the last (FIXME: VERIFY what he's saying)
+Request::
 
-Some background on how Kafka stores data:
+    TIME = int(4) // Milliseconds since UNIX Epoch.
+
+This one can be deceptive. It is *not* a way to get the offset that 
+occurred at a specific time. Kafka doesn't presently track things at that level
+of granularity, though there is a 
+`proposal to do so <https://issues.apache.org/jira/browse/KAFKA-87>`_.
+To understand how this request works, you should know how Kafka stores data. If 
+you're unfamiliar with segment files, please see :ref:`what-are-segment-files`.
+
+What Kafka does here is return up to MAX_NUMBER of offsets, sorted in descending 
+order, where the offsets are:
+
+1. The first offset of every segment file with a modified time less than TIME.
+2. If the last segment file for the partition is not empty and was modified 
+   earlier than TIME, it will return both the first offset and the high water 
+   mark offset. The high water mark is not the offset of the last message, but
+   rather the offset that the next message sent to the partition will be written 
+   to.
+
+There are special values for TIME indicating the earliest (-2) and latest (-1) 
+time, which will fetch you the first and last offsets, respectively. Note that
+because offsets are pulled in descending order, asking for the earliest offset
+will always return you a list with a single element.
+
+Because segment files are quite large and fine granularity is not possible, 
+this call will mostly be used to find the beginning and ending offsets.
+
+.. _what-are-segment-files: 
+
+What are segment files?
+#######################
 
 Say your Kafka broker is configured to store its log files in /tmp/kafka-logs 
 and you have a topic named "dogs", with two partitions. Kafka will create a 
@@ -324,16 +354,4 @@ write to the current segment file until it goes over that size, and then will
 write the next message in new segment file. The files are actually slightly 
 larger than the limit, because Kafka will finish writing the message -- a 
 single message is never split across multiple files.
-
-
-Jun's comments:
-GetOffsetShell doesn't return the offset of every message. It returns the
-offset of the first message in every segment file. If you provide a time,
-the offsets you get back are based on the last modified time of the segment
-files. There is a jira kafka-87 that tries to improve that.
-
-Querying by timestamp might not work at all. See 
-`Carlo's post <http://mail-archives.apache.org/mod_mbox/incubator-kafka-users/201108.mbox/%3CCAFbh0Q3QgsYXn4kjTTh0zZ9DJZ7J14tM5g24RFJSihFfbqDNyw@mail.gmail.com%3E>`_
-
-
 
