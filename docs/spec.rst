@@ -301,7 +301,39 @@ Offsets
 
 Request::
 
-    TIME = int(4) // Milliseconds since UNIX Epoch.
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /                         REQUEST HEADER                        /
+    /                                                               /
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                              TIME                             |
+    |                                                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                     MAX_NUMBER (of OFFSETS)                   |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+    TIME = int(8) // Milliseconds since UNIX Epoch.
+                  // -1 = LATEST 
+                  // -2 = EARLIEST
+    MAX_NUMBER = int(4) // Return up to this many offsets
+
+Response::
+
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /                         REQUEST HEADER                        /
+    /                                                               /
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                         NUMBER_OFFSETS                        |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /                       OFFSETS (0 or more)                     /
+    /                                                               /
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+    NUMBER_OFFSETS = int(4) // How many offsets are being returned
+    OFFSETS = int(8)[] // List of 64-bit offsets
 
 This one can be deceptive. It is *not* a way to get the offset that 
 occurred at a specific time. Kafka doesn't presently track things at that level
@@ -315,10 +347,10 @@ order, where the offsets are:
 
 1. The first offset of every segment file with a modified time less than TIME.
 2. If the last segment file for the partition is not empty and was modified 
-   earlier than TIME, it will return both the first offset and the high water 
-   mark offset. The high water mark is not the offset of the last message, but
-   rather the offset that the next message sent to the partition will be written 
-   to.
+   earlier than TIME, it will return both the first offset for that segment and
+   the high water mark. The high water mark is not the offset of the last 
+   message, but rather the offset that the next message sent to the partition 
+   will be written to.
 
 There are special values for TIME indicating the earliest (-2) and latest (-1) 
 time, which will fetch you the first and last offsets, respectively. Note that
