@@ -59,17 +59,17 @@ All requests must start with the following header::
     |                           PARTITION                           |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-    REQUEST_LENGTH = int(4) // Length in bytes of entire request (excluding this field)
-    REQUEST_TYPE   = int(2) // See table below
-    TOPIC_LENGTH   = int(2) // Length in bytes of the topic name
+    REQUEST_LENGTH = int32 // Length in bytes of entire request (excluding this field)
+    REQUEST_TYPE   = int16 // See table below
+    TOPIC_LENGTH   = int16 // Length in bytes of the topic name
 
     TOPIC = String // Topic name, ASCII, not null terminated
                    // This becomes the name of a directory on the broker, so no 
                    // chars that would be illegal on the filesystem.
 
-    PARTITION = int(4) // Partition to act on. Number of available partitions is 
-                       // controlled by broker config. Partition numbering 
-                       // starts at 0.
+    PARTITION = int32 // Partition to act on. Number of available partitions is 
+                      // controlled by broker config. Partition numbering 
+                      // starts at 0.
 
     ============  =====  =======================================================
     REQUEST_TYPE  VALUE  DEFINITION
@@ -94,6 +94,9 @@ All responses have the following 6 byte header::
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
     |         ERROR_CODE            |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+    RESPONSE_LENGTH = int32 // Length in bytes of entire response (excluding this field)
+    ERROR_CODE = int16 // See table below.
 
     ================  =====  ===================================================
     ERROR_CODE        VALUE  DEFINITION
@@ -127,9 +130,9 @@ Version 0.6 and earlier of Kafka use the following format::
     /                         PAYLOAD (cont.)                       /
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-    LENGTH   = int(4)  // Length in bytes of entire message (excluding this field)
-    MAGIC    = byte(1) // 0 is the only valid value
-    CHECKSUM = int(4)  // CRC32 checksum of the PAYLOAD
+    LENGTH   = int32 // Length in bytes of entire message (excluding this field)
+    MAGIC    = int8  // 0 is the only valid value
+    CHECKSUM = int32 // CRC32 checksum of the PAYLOAD
     PAYLOAD  = Bytes[] // Message content
 
 The offsets to request messages are just byte offsets. To find the offset of the
@@ -155,12 +158,12 @@ Starting with version 0.7, Kafka added an extra field for compression::
     /                         PAYLOAD (cont.)                       /
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-    LENGTH = int(4) // Length in bytes of entire message (excluding this field)
-    MAGIC = byte(1) // 0 = COMPRESSION attribute byte does not exist (v0.6 and below)
-                    // 1 = COMPRESSION attribute byte exists (v0.7 and above)
-    COMPRESSION = byte(1) // 0 = none; 1 = gzip; 2 = snappy;
-                          // Only exists at all if MAGIC == 1
-    CHECKSUM = int(4) // CRC32 checksum of the PAYLOAD
+    LENGTH = int32 // Length in bytes of entire message (excluding this field)
+    MAGIC = int8 // 0 = COMPRESSION attribute byte does not exist (v0.6 and below)
+                 // 1 = COMPRESSION attribute byte exists (v0.7 and above)
+    COMPRESSION = int8 // 0 = none; 1 = gzip; 2 = snappy;
+                       // Only exists at all if MAGIC == 1
+    CHECKSUM = int32  // CRC32 checksum of the PAYLOAD
     PAYLOAD = Bytes[] // Message content
 
 Note that compression is end-to-end. Meaning that the Producer is responsible
@@ -209,7 +212,7 @@ To produce messages from the client and send to Kafka, use the following format:
     /                            MESSAGES                           /
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-    MESSAGES_LENGTH = int(4) // Length in bytes of the MESSAGES section
+    MESSAGES_LENGTH = int32 // Length in bytes of the MESSAGES section
     MESSAGES = Collection of MESSAGES (see above)
 
 
@@ -245,8 +248,8 @@ Request to send to the broker::
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
     REQUEST_HEADER = See REQUEST_HEADER above
-    OFFSET   = int(8) // Offset in topic and partition to start from. 64-bit.
-    MAX_SIZE = int(4) // MAX_SIZE of the message set to return
+    OFFSET   = int64 // Offset in topic and partition to start from
+    MAX_SIZE = int32 // MAX_SIZE of the message set to return
 
 Response::
 
@@ -321,10 +324,10 @@ Request::
     |                     MAX_NUMBER (of OFFSETS)                   |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-    TIME = int(8) // Milliseconds since UNIX Epoch.
-                  // -1 = LATEST 
-                  // -2 = EARLIEST
-    MAX_NUMBER = int(4) // Return up to this many offsets
+    TIME = int64 // Milliseconds since UNIX Epoch.
+                 // -1 = LATEST 
+                 // -2 = EARLIEST
+    MAX_NUMBER = int32 // Return up to this many offsets
 
 Response::
 
@@ -340,8 +343,8 @@ Response::
     /                                                               /
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-    NUMBER_OFFSETS = int(4) // How many offsets are being returned
-    OFFSETS = int(8)[] // List of 64-bit offsets
+    NUMBER_OFFSETS = int32 // How many offsets are being returned
+    OFFSETS = int64[] // List of offsets
 
 This one can be deceptive. It is *not* a way to get the offset that 
 occurred at a specific time. Kafka doesn't presently track things at that level
