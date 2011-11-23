@@ -6,6 +6,12 @@
 Welcome to brod's documentation!
 ================================
 
+brod is a Python client for the Kafka distributed publish/subscribe messaging 
+service. It started as a fork of `pykafka <https://github.com/dsully/pykafka>`_, 
+but became a total rewrite as we started adding features.
+
+It's named after Max Brod, Franz Kafka's friend and supporter.
+
 Contents:
 
 .. toctree::

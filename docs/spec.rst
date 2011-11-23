@@ -1,5 +1,5 @@
-Kafka Wire Format
-=================
+Writing a Client for Kafka
+==========================
 
 `Kafka <http://incubator.apache.org/kafka/>`_ is a remarkably elegant messaging 
 server that we love using at Datadog. This is an attempt to document the wire 
@@ -9,7 +9,7 @@ document is based off of the Kafka wire format
 `wiki entry <https://cwiki.apache.org/confluence/display/KAFKA/Wire+Format>`_
 by Jeffrey Damick and Taylor Gautier.
 
-This does not yet cover ZooKeeper integration, but we hope to add that shortly.
+This does not yet cover ZooKeeper integration, but I hope to add that shortly.
 
 Status of this Document
 -----------------------
