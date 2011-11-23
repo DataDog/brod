@@ -15,10 +15,12 @@ Status of this Document
 -----------------------
 I'm currently in the process of verifying many of the things said here, to make
 sure they're actually a result of the protocol and not some quirk of our client.
-I've tried to flag those with "FIXME" notes.
+I've tried to flag those with "FIXME" notes, but I'm sure I've missed a few.
 
-Corrections and comments would be greatly appreciated. Please drop me an email
-at `dave@datadoghq.com <mailto://dave@datadoghq.com>`_
+I really want to make this into the document that I wish we had at Datadog when
+we first started working on Kafka client code. Corrections and comments would be 
+greatly appreciated. Please drop me an email at 
+`dave@datadoghq.com <mailto://dave@datadoghq.com>`_
 
 Ground Rules
 ------------
@@ -111,19 +113,19 @@ All responses have the following 6 byte header::
     ================  =====  ===================================================
     ERROR_CODE        VALUE  DEFINITION
     ================  =====  ===================================================
-    UnknownCode        -1    
+    Unknown            -1    Unknown Error
     NoError             0    Success 
-    OffsetOutOfRange    1    Offset requested is not in the 
-    InvalidMessage      2
-    WrongPartition      3    You tried to access a partition that doesn't exist.
+    OffsetOutOfRange    1    Offset requested is no longer available on the server
+    InvalidMessage      2    A message you sent failed its checksum and is corrupt.
+    WrongPartition      3    You tried to access a partition that doesn't exist
+                             (was not between 0 and (num_partitions - 1)).
     InvalidFetchSize    4    The size you requested for fetching is smaller than
                              the message you're trying to fetch.
     ================  =====  ===================================================
 
-FIXME: Check these names against their source tree
+FIXME: Add tests to verify all these codes.
 
-FIXME: Check what happens when you have a partition that isn't created yet and
-you try to read from it.
+FIXME: Check that there weren't more codes added in 0.7.
 
 Message (<= v0.6)
 **********************
@@ -243,6 +245,9 @@ Multi-Produce with n=1.
 
 Like Produce, there is no response for Multi-Produce.
 
+FIXME: Haven't implemented this to verify yet.
+
+
 Fetch
 *****
 Reading messages from a specific topic/partition combination.
@@ -295,7 +300,8 @@ Edge case behavior:
 
 Normal, but possibly unexpected behavior:
 
-* If you ask the broker for up to 300K worth  of messages from a given topic and
+* FIXME: VERIFY that this isn't just our client -- 
+  If you ask the broker for up to 300K worth  of messages from a given topic and
   partition, it will send you the appropriate headers followed by a 300K chunk
   worth of the message log. If 300K ends in the middle of a message, you get 
   half a message at the end. If it ends halfway through a message header, you 
@@ -322,6 +328,8 @@ aside from the REQUEST_TYPE change, it's exactly equivalent to a Multi-Fetch
 with n=1.
 
 The response consists of n Fetch responses, back to back.
+
+FIXME: Haven't implemented this to verify yet.
 
 Offsets
 *******
