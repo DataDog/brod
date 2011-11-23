@@ -11,6 +11,15 @@ by Jeffrey Damick and Taylor Gautier.
 
 This does not yet cover ZooKeeper integration, but we hope to add that shortly.
 
+Status of this Document
+-----------------------
+I'm currently in the process of verifying many of the things said here, to make
+sure they're actually a result of the protocol and not some quirk of our client.
+I've tried to flag those with "FIXME" notes.
+
+Corrections and comments would be greatly appreciated. Please drop me an email
+at `dave@datadoghq.com <mailto://dave@datadoghq.com>`_
+
 Ground Rules
 ------------
 
@@ -76,9 +85,10 @@ All requests must start with the following header::
     ============  =====  =======================================================
     PRODUCE         0    Send a group of messages to a topic and partition.
     FETCH           1    Fetch a group of messages from a topic and partition.
-    MULTIFETCH      2    
-    MULTIPRODUCE    3
-    OFFSETS         4
+    MULTIFETCH      2    Multiple FETCH requests, chained together
+    MULTIPRODUCE    3    Multiple PRODUCE requests, chained together
+    OFFSETS         4    Find offsets before a certain time (this can be a bit
+                         misleading, please read the details of this request).
     ============  =====  =======================================================
 
 
@@ -101,6 +111,8 @@ All responses have the following 6 byte header::
     ================  =====  ===================================================
     ERROR_CODE        VALUE  DEFINITION
     ================  =====  ===================================================
+    UnknownCode        -1    
+    NoError             0    Success 
     OffsetOutOfRange    1    Offset requested is not in the 
     InvalidMessage      2
     WrongPartition      3    You tried to access a partition that doesn't exist.
@@ -229,6 +241,8 @@ back in one network call. There is a proposal to deprecate Produce entirely,
 since aside from the REQUEST_TYPE change, it's exactly equivalent to a 
 Multi-Produce with n=1.
 
+Like Produce, there is no response for Multi-Produce.
+
 Fetch
 *****
 Reading messages from a specific topic/partition combination.
@@ -306,6 +320,8 @@ REQUEST_TYPE in their REQUEST_HEADER to MULTIFETCH, and sending them back to
 back in one network call. There is a proposal to deprecate Fetch entirely, since
 aside from the REQUEST_TYPE change, it's exactly equivalent to a Multi-Fetch 
 with n=1.
+
+The response consists of n Fetch responses, back to back.
 
 Offsets
 *******
