@@ -205,6 +205,7 @@ you make calculations for the offset you can fetch next, you have to make sure
 you're doing it on the boundaries of the compressed messages, not the inner
 messages.
 
+FIXME: Haven't implemented compression yet, need to verify this is correct.
 
 Interactions
 ------------
