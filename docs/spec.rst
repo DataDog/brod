@@ -381,7 +381,8 @@ you're unfamiliar with segment files, please see :ref:`what-are-segment-files`.
 What Kafka does here is return up to MAX_NUMBER of offsets, sorted in descending 
 order, where the offsets are:
 
-1. The first offset of every segment file with a modified time less than TIME.
+1. The first offset of every segment file for a given partition with a modified 
+   time less than TIME.
 2. If the last segment file for the partition is not empty and was modified 
    earlier than TIME, it will return both the first offset for that segment and
    the high water mark. The high water mark is not the offset of the last 
