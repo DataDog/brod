@@ -242,13 +242,13 @@ if the produce was successful or not. This is
 Multi-Produce
 *************
 
-Multi-Produce is just taking a bunch of Produce requests, changing the 
-REQUEST_TYPE in their REQUEST_HEADER to MULTIPRODUCE, and sending them back to
-back in one network call. There is a proposal to deprecate Produce entirely, 
-since aside from the REQUEST_TYPE change, it's exactly equivalent to a 
-Multi-Produce with n=1.
+.. Multi-Produce is just taking a bunch of Produce requests, changing the 
+   REQUEST_TYPE in their REQUEST_HEADER to MULTIPRODUCE, and sending them back to
+   back in one network call. There is a proposal to deprecate Produce entirely, 
+   since aside from the REQUEST_TYPE change, it's exactly equivalent to a 
+   Multi-Produce with n=1.
 
-Like Produce, there is no response for Multi-Produce.
+   Like Produce, there is no response for Multi-Produce.
 
 FIXME: Haven't implemented this to verify yet.
 
@@ -323,13 +323,13 @@ Normal, but possibly unexpected behavior:
 Multi-Fetch
 ***********
 
-Multi-Fetch is just taking a bunch of Fetch requests, changing the 
-REQUEST_TYPE in their REQUEST_HEADER to MULTIFETCH, and sending them back to
-back in one network call. There is a proposal to deprecate Fetch entirely, since
-aside from the REQUEST_TYPE change, it's exactly equivalent to a Multi-Fetch 
-with n=1.
+.. Multi-Fetch is just taking a bunch of Fetch requests, changing the 
+   REQUEST_TYPE in their REQUEST_HEADER to MULTIFETCH, and sending them back to
+   back in one network call. There is a proposal to deprecate Fetch entirely, since
+   aside from the REQUEST_TYPE change, it's exactly equivalent to a Multi-Fetch 
+   with n=1.
 
-The response consists of n Fetch responses, back to back.
+.. The response consists of n Fetch responses, back to back.
 
 FIXME: Haven't implemented this to verify yet.
 
