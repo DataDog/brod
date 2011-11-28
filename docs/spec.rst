@@ -33,7 +33,7 @@ Some really high level takeaways to get started:
 
 * Kafka has topics, and topics have numbered partitions starting from 0. A topic 
   can be created at runtime just by writing to it, but the number of partitions 
-  per topic is determined by configuration.
+  per topic is determined by broker configuration.
 * Kafka stores messages on disk, in a series of large, append-only log files
   broken up into segments. Each topic+partition is a directory of these segment
   files. For more details, see :ref:`what-are-segment-files`.
@@ -192,16 +192,16 @@ ratio, snappy gives faster performance.
 Let's look at what compressed messages act like::
 
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |          CM1         |         CM2        |         CM3         |
+    |          CP1         |         CP2        |         CP3         |
     | M1 | M2 | M3 | M4... | M12 | M13 | M14... | M26 | M27 | M28 ... |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 In this scenario, let's say that `M1`, `M2`, etc. represent complete,
-*uncompressed* messages that the user of your library wants to send. What your
-client needs to do is take `M1`, `M2`... up to some predetermined number,
-concatenate them together, and then compress them using gzip or snappy. The
-result (`CM1` in  this case) becomes the PAYLOAD for the *compressed* message
-your library will send to Kafka.
+*uncompressed* messages (including headers) that the user of your library wants
+to send. What your client needs to do is take `M1`, `M2`... up to some
+predetermined number/size, concatenate them together, and then compress them
+using gzip or snappy. The result (`CP1` in  this case) becomes the PAYLOAD for
+the *compressed* message `CM1` that your library will send to Kafka.
 
 It also means that we have to be careful about calculating the offsets. To
 Kafka, `M1`, `M1`, don't really exist. It only sees the `CM1` you send. So when
