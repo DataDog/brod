@@ -291,11 +291,8 @@ Edge case behavior:
   you will get a WrongPartition error.
 * FIXME: VERIFY -- If the MAX_SIZE you specify is smaller than the largest
   message that would be fetched, you will get an InvalidFetchSize error.
-* FIXME: VERIFY -- If you ask for an offset that is not at the start of a 
-  message, you will receive 0 messages, but no error. This is a broken state
-  that you should watch out for. Our approach when doing repeated fetches with
-  brod is to do a check using the OFFSETS request if the first FETCH returns no
-  messages.
+* FIXME: VERIFY -- What happens when you ask for an offset that's in the middle
+  of a message? It just sends you the chunk without checking?
 * FIXME -- Try invalid topic, invalid partition reading
 * FIXME -- Look at InvalidMessageSizeException
 
