@@ -31,16 +31,20 @@ a great overview of Kafka.
 
 Some really high level takeaways to get started:
 
+* Kafka has topics, and topics have numbered partitions starting from 0. A topic 
+  can be created at runtime just by writing to it, but the number of partitions 
+  per topic is determined by configuration.
 * Kafka stores messages on disk, in a series of large, append-only log files
-  broken up into segments.
-* Topics are referenced by name, and each topic can have multiple partitions
-  (partitions are numbered, starting from 0).
-* Topics can be created dynamically just by writing to it, but the max number of
-  partitions for a topic is fixed and determined by broker configuration. You 
-  must specify which partition of a topic you want to read from or write to.
-* Kafka relies on smarter clients to keep bookkeeping. When requesting messages,
-  the client has to specify what offset in the topic/partition it wants them 
-  pulled from. The broker does not keep track of what the client has read. More
+  broken up into segments. Each topic+partition is a directory of these segment
+  files. For more details, see :ref:`what-are-segment-files`.
+* An offset is just the byte offset in a given log for a topic+partition. The
+  messages don't have any other unique identifier. They're simply stored back to
+  back in the segment files, and you ask for them by their byte offset.
+* Kafka tends to do the simplest thing possible and relies on smarter clients to
+  keep bookkeeping. When producing messages, the client has to specify what
+  topic and partition to send the message to. When requesting messages, the
+  client has to specify what topic, partition, and offset it wants them pulled
+  from. The broker does not keep track of what the client has read. More
   advanced setups use ZooKeeper to help with this tracking, but that is 
   currently beyond the scope of this document.
 * The protocol 
