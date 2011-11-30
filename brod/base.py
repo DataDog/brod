@@ -67,6 +67,7 @@ class Lengths(object):
     TIME_VAL = 8
     MESSAGE_LENGTH = 4
     MAGIC = 1
+    COMPRESSION = 1
     CHECKSUM = 4
     MESSAGE_HEADER = MESSAGE_LENGTH + MAGIC + CHECKSUM
 
@@ -206,6 +207,9 @@ class BaseKafka(object):
                     break
                 
                 magic = struct.unpack('>B', raw_magic)[0]
+                if magic == 1:
+                    compression = message_buffer.read(Lengths.COMPRESSION)
+                    # We don't do anything with this at the moment.
                 
                 # Parse the checksum (int:4)
                 raw_checksum = message_buffer.read(Lengths.CHECKSUM)
