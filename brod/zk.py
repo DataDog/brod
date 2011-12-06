@@ -97,12 +97,9 @@ class ZKUtil(object):
         consumer_id_data = [self._zk_util.properties(path).data
                             for path in consumer_id_paths]
 
-        # FIXME
-        return None
-
-        #return [consumer_id for consumer_id in consumer_ids_in_group
-        #        if topic in ]
-        #pass
+        return [consumer_id for consumer_id, data
+                in zip(consumer_ids_in_group, consumer_id_data)
+                if topic in data]
 
     def register_consumer(self, consumer_group, consumer_id, topic):
         """Creates the following permanent node, if it does not exist already:

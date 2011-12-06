@@ -56,7 +56,6 @@ log = logging.getLogger("brod.test_zk")
 class TestZK(TestCase):
 
     def test_001_brokers_all_up(self):
-        time.sleep(100)
         producer = ZKProducer(ZK_CONNECT_STR, "topic_001")
         self.assertEquals(len(producer.broker_partitions), 
                           NUM_BROKERS * NUM_PARTITIONS)
