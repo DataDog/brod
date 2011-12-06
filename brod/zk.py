@@ -58,16 +58,16 @@ class ZKUtil(object):
         log.debug(u"broker_ids: {0}".format(broker_ids))
 
         # Then the broker_strings for each broker
-        broker_paths = map(paths.broker, broker_ids)
+        broker_paths = map(self._path_for_broker, broker_ids)
         log.debug(u"broker_paths: {0}".format(broker_paths))
 
-        broker_strings = map(self._properties, broker_paths)
+        broker_strings = map(self._zk_properties, broker_paths)
         log.debug(u"broker_strings: {0}".format(broker_strings))
 
         # Then the num_parts per broker (each could be set differently)
-        broker_topic_paths = [paths.broker_for_topic(broker_id, topic) 
+        broker_topic_paths = [self._path_for_broker_topic(broker_id, topic) 
                               for broker_id in broker_ids]
-        num_parts = map(self._properties, broker_topic_paths)
+        num_parts = map(self._zk_properties, broker_topic_paths)
         log.debug(u"num_parts: {0}".format(num_parts))
         
         # BrokerPartition
@@ -156,6 +156,12 @@ class ZKUtil(object):
                 zookeeper.create(self._zk.handle, node_to_create, init_data, ZKUtil.ACL)
 
             created_so_far.append(node)
+
+    def _path_for_broker_topic(self, broker_id, topic_name):
+        return "{0}/{1}".format(self._path_for_topic(topic_name), broker_id)
+
+    def _path_for_broker(self, broker_id):
+        return "/brokers/ids/{0}".format(broker_id)
 
     def _path_for_topics(self):
         return "/brokers/topics"

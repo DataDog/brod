@@ -37,6 +37,7 @@ from unittest import TestCase
 
 from zc.zk import ZooKeeper
 
+from brod import Kafka
 from brod.zk import ZKProducer
 
 ZKConfig = namedtuple('ZKConfig', 'config_file data_dir client_port')
@@ -56,7 +57,7 @@ log = logging.getLogger("brod.test_zk")
 class TestZK(TestCase):
 
     def test_001_brokers_all_up(self):
-        producer = ZKProducer(ZK_CONNECT_STR, "topic_001")
+        producer = ZKProducer(ZK_CONNECT_STR, "t1")
         self.assertEquals(len(producer.broker_partitions), 
                           NUM_BROKERS * NUM_PARTITIONS)
 
@@ -108,11 +109,19 @@ class TestZK(TestCase):
         # Now give the Kafka instances a little time to spin up...
         time.sleep(3)
 
+        # FIXME: This is a kludge until we find out what's actually the right
+        # way to handle this situation
+        for kafka_config in self.kafka_configs:
+            k = Kafka("localhost", kafka_config.port)
+            for topic in ["t1", "t2", "t3"]:
+                k.produce(topic, ["bootstrap"], 0)
+        time.sleep(0.5)
+
+
     def setup_zookeeper(self):
         # Create all the directories we need...
         config_dir, data_dir = self._create_run_dirs("zookeeper/config",
                                                      "zookeeper/data")
-
         # Write this session's config file...
         config_file = os.path.join(config_dir, "zookeeper.properties")
         zk_config = ZKConfig(config_file, data_dir, ZK_PORT)
