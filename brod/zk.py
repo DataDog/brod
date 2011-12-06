@@ -47,8 +47,8 @@ class ZKUtil(object):
     ACL = [{"perms": 0x1f, "scheme": "world", "id": "anyone"}]
 
     """Abstracts all Kafka-specific ZooKeeper access."""
-    def __init__(self, zk_conn):
-        self._zk = zk_conn
+    def __init__(self, zk_conn_str):
+        self._zk = ZooKeeper(zk_conn_str)
 
     def broker_partitions_for(self, topic):
         """Return a list of BrokerPartitions based on values found in 
@@ -81,7 +81,7 @@ class ZKUtil(object):
 
     def broker_ids_for(self, topic):
         topic_path = self._path_for_topic(topic)
-        return sorted(int(broker_id) for broker_id in self._children(topic_path))
+        return sorted(int(broker_id) for broker_id in self._zk_children(topic_path))
 
     def consumer_ids_for(self, topic, consumer_group):
         """For a given consumer group, return a list of all consumer_ids that
@@ -97,9 +97,12 @@ class ZKUtil(object):
         consumer_id_data = [self._zk_util.properties(path).data
                             for path in consumer_id_paths]
 
-        return [consumer_id for consumer_id in consumer_ids_in_group
-                if topic in ]
-        pass
+        # FIXME
+        return None
+
+        #return [consumer_id for consumer_id in consumer_ids_in_group
+        #        if topic in ]
+        #pass
 
     def register_consumer(self, consumer_group, consumer_id, topic):
         """Creates the following permanent node, if it does not exist already:
@@ -179,10 +182,10 @@ class ZKUtil(object):
 
 class ZKProducer(object):
 
-    def __init__(self, zk_conn, topic):
+    def __init__(self, zk_conn_str, topic):
         self._id = uuid.uuid1()
         self._topic = topic
-        self._zk_util = ZKUtil(zk_conn)
+        self._zk_util = ZKUtil(zk_conn_str)
 
         # Try to pull the brokers and partitions we can send to on this topic
         self._broker_partitions = self._zk_util.broker_partitions_for(self.topic)
@@ -199,6 +202,10 @@ class ZKProducer(object):
     @property
     def topic(self):
         return self._topic
+    
+    @property
+    def broker_partitions(self):
+        return self._broker_partitions[:]
 
     # FIXME: Change this behavior so that it's random if they don't specify
     #        an explicit key.
@@ -229,6 +236,7 @@ class ZKProducer(object):
 
 
 class Consumer(object):
+    """Take 2 on the rebalancing code."""
 
     def __init__(self, zk_conn, consumer_group, topic):
         self._id = self._create_consumer_id(consumer_group)

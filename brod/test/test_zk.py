@@ -10,13 +10,19 @@ Current assumptions this script makes:
 2. Kafka will run on ports 9101 and up, depending on the number of instances.
    (9092 is the usual port.)
 3. You have Kafka installed and Kafka's /bin directory is in your PATH. In 
-   particular, the tests require zookeeper-server-start.sh and 
-   kafka-server-start.sh
+   particular, the tests require kafka-run-class.sh
 4. Kafka will use the JMX ports from 10000 and up, depending on the number of
    instances. This is not something we can set in the config file -- we have
    to pass it in the form of an environment var JMX_PORT.
 5. You have env installed (i.e. you're running on a UNIX machine)
 6. You have a /tmp directory
+
+Note that the test order matters. Bringing ZooKeeper and the Kafka brokers up
+takes around 6 seconds or so, so we should try to avoid it. In general, the 
+tests should be self contained and try to return things to the state they were
+if possible.
+
+We'll probably have to allow the world to be reset eventually.
 """
 import logging
 import os
@@ -31,17 +37,29 @@ from unittest import TestCase
 
 from zc.zk import ZooKeeper
 
+from brod.zk import ZKProducer
+
 ZKConfig = namedtuple('ZKConfig', 'config_file data_dir client_port')
 KafkaConfig = namedtuple('KafkaConfig', 
                          'config_file broker_id port log_dir ' + \
                          'num_partitions zk_server jmx_port')
-ZK_PORT = 2182
 KAFKA_BASE_PORT = 9101
 JMX_BASE_PORT = 10000
+ZK_PORT = 2182
+ZK_CONNECT_STR = "localhost:{0}".format(ZK_PORT)
+
+NUM_BROKERS = 3 # How many Kafka brokers we're going to spin up
+NUM_PARTITIONS = 5 # How many partitions per topic per broker
 
 log = logging.getLogger("brod.test_zk")
 
 class TestZK(TestCase):
+
+    def test_001_brokers_all_up(self):
+        time.sleep(100)
+        producer = ZKProducer(ZK_CONNECT_STR, "topic_001")
+        self.assertEquals(len(producer.broker_partitions), 
+                          NUM_BROKERS * NUM_PARTITIONS)
 
     def setUp(self):
         timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%s')
@@ -51,8 +69,7 @@ class TestZK(TestCase):
 
         # Set up configuration and data directories for ZK and Kafka
         self.zk_config = self.setup_zookeeper()
-        self.kafka_configs = self.setup_kafka(3, 5) # 3 instances, 5 partitions
-        print self.kafka_configs
+        self.kafka_configs = self.setup_kafka(NUM_BROKERS, NUM_PARTITIONS)
 
         # Start ZooKeeper...
         log.info("Starting ZooKeeper with config {0}".format(self.zk_config))
@@ -66,9 +83,11 @@ class TestZK(TestCase):
                           )
         # Give ZK a little time to finish starting up before we start spawning
         # Kafka instances to connect to it.
-        time.sleep(5)
+        time.sleep(3)
 
-        # Start Kafka...
+        # Start Kafka. We use kafka-run-class.sh instead of 
+        # kafka-server-start.sh because the latter sets the JMX_PORT to 9999
+        # and we want to set it differently for each Kafka instance
         self.kafka_processes = []
         for kafka_config in self.kafka_configs:
             env = os.environ.copy()
@@ -88,7 +107,7 @@ class TestZK(TestCase):
             self.kafka_processes.append(process)
         
         # Now give the Kafka instances a little time to spin up...
-        time.sleep(5)
+        time.sleep(3)
 
     def setup_zookeeper(self):
         # Create all the directories we need...
@@ -154,16 +173,3 @@ class TestZK(TestCase):
         """Return the template configuration file for a given config file."""
         script_dir = os.path.dirname(os.path.realpath(__file__))
         return os.path.join(script_dir, "server_config", config)
-
-    def test_basics(self):
-        print "hello world"
-        assert(False)
-        # raise Exception("Just want to trigger logs")
-
-        # p = producer.ZKProducer(ZooKeeper(zkaddr=2182), "steve")
-        #print p._broker_partitions
-        #print p._connections
-        #for i in range(2):
-        #    print p.send(["hi %s" % i], key=i)
-        # assert(p._broker_partitions == None)
-
