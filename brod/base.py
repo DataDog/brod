@@ -52,7 +52,7 @@ MAGIC_BYTE = 0
 LATEST_OFFSET   = -1
 EARLIEST_OFFSET = -2
 
-kafka_log  = logging.getLogger('kafka')
+kafka_log  = logging.getLogger('brod')
 
 class Lengths(object):
     ERROR_CODE = 2
