@@ -61,7 +61,8 @@ class TestZK(TestCase):
                                  self.zk_config.config_file],
                                 stdout=open(self.run_dir + "/zookeeper.log", "wb"),
                                 stderr=open(self.run_dir + "/zookeeper_error.log", "wb"),
-                                shell=False
+                                shell=False,
+                                preexec_fn=os.setsid
                           )
         # Give ZK a little time to finish starting up before we start spawning
         # Kafka instances to connect to it.
@@ -81,6 +82,7 @@ class TestZK(TestCase):
                             stdout=open("{0}/{1}".format(self.run_dir, run_log), "wb"),
                             stderr=open("{0}/{1}".format(self.run_dir, run_errs), "wb"),
                             shell=False,
+                            preexec_fn=os.setsid,
                             env=env,
                       )
             self.kafka_processes.append(process)
@@ -124,19 +126,16 @@ class TestZK(TestCase):
 
     def tearDown(self):
         # Have to kill Kafka before ZooKeeper, or Kafka will get very distraught
-        # You can't kill shell-spawned processes with process.terminate(), so
-        # I'm doing this kludge until I run across a better way.
+        # You can't kill the processes with Popen.terminate() because what we
+        # call is just a shell script that spawns off a Java process. But since
+        # we did that bit with preexec_fn=os.setsid when we created them, we can
+        # kill the entire process group with os.killpg
         for process in self.kafka_processes:
             log.info("Terminating Kafka process {0}".format(process))
-            process.terminate()
-            process.wait()
-            # subprocess.call("kill {0}".format(process.pid), shell=True)
+            os.killpg(process.pid, signal.SIGTERM)
 
         log.info("Terminating ZooKeeper process {0}".format(self.zk_process))
-        # os.killpg(self.zk_process.pid, signal.SIGTERM)
-        # self.zk_process.wait()
-        self.zk_process.terminate()
-        self.zk_process.wait()
+        os.killpg(self.zk_process.pid, signal.SIGTERM)
 
     def _write_config(self, template_name, finished_location, format_obj):
         with open(self._template(template_name)) as template_file:
