@@ -1,5 +1,7 @@
 import json
 import logging
+import platform
+import time
 import uuid
 from collections import namedtuple, Mapping
 from itertools import chain
@@ -13,6 +15,7 @@ from brod.blocking import Kafka
 log = logging.getLogger('brod.zk')
 
 class NoAvailablePartitionsError(KafkaError): pass
+class ConsumerEntryNotFoundError(KafkaError): pass
 
 class BrokerPartition(namedtuple('BrokerPartition', 
                                  'broker_id creator host port topic partition')):
@@ -41,6 +44,76 @@ class BrokerPartition(namedtuple('BrokerPartition',
                                 partition=i) 
                 for i in range(num_parts)]
 
+
+class FetchResult(object):
+    """A FetchResult is what's returned when we do a MULTIFETCH request. It 
+    can contain an arbitrary number of message sets, which it'll eventually
+    be able to query more intelligently than this. :-P"""
+
+    def __init__(self, message_sets):
+        self._message_sets = message_sets[:]
+
+    def __iter__(self):
+        return iter(self._message_sets)
+    
+    def __len__(self):
+        return len(self._message_sets)
+
+
+class MessageSet(object):
+    """A collection of messages and offsets returned from a request made to
+    a single broker/topic/partition. Allows you to iterate via (offset, msg)
+    tuples and grab origin information.
+
+    ZK info might not be available if this came from a regular multifetch.
+    """
+
+    def __init__(self, broker_partition, offsets_msgs):
+        self._offsets_msgs = offsets_msgs[:]
+        self._broker_partition = broker_partition
+    
+    ################## Where did I come from? ##################
+    @property
+    def broker_partition(self):
+        return self._broker_partition
+
+    @property
+    def topic(self):
+        return self.broker_partition.topic
+
+    ################## What do I have inside? ##################
+    @property
+    def offsets(self):
+        return [offset for offset, msg in self]
+
+    @property
+    def messages(self):
+        return [msg for offset, msg in self]
+
+    @property
+    def start_offset(self):
+        return self.offsets[0] if self else None
+    
+    @property
+    def end_offset(self):
+        return self.offsets[-1] if self else None
+
+    @property
+    def size(self):
+        return sum(len(msg) for msg in self.messages)
+
+    def __iter__(self):
+        return iter(self._offsets_msgs)
+    
+    def __len__(self):
+        return len(self._offsets_msgs)
+
+    ################## Parse from binary ##################
+    @classmethod
+    def parse(self, broker_partition, data):
+        pass
+
+
 class ZKUtil(object):
 
     # This is a free-for-all ACL that we should re-evaluate later
@@ -49,6 +122,9 @@ class ZKUtil(object):
     """Abstracts all Kafka-specific ZooKeeper access."""
     def __init__(self, zk_conn_str):
         self._zk = ZooKeeper(zk_conn_str)
+    
+    def close(self):
+        self._zk.close()
 
     def broker_partitions_for(self, topic):
         """Return a list of BrokerPartitions based on values found in 
@@ -58,14 +134,14 @@ class ZKUtil(object):
         log.debug(u"broker_ids: {0}".format(broker_ids))
 
         # Then the broker_strings for each broker
-        broker_paths = map(self._path_for_broker, broker_ids)
+        broker_paths = map(self.path_for_broker, broker_ids)
         log.debug(u"broker_paths: {0}".format(broker_paths))
 
         broker_strings = map(self._zk_properties, broker_paths)
         log.debug(u"broker_strings: {0}".format(broker_strings))
 
         # Then the num_parts per broker (each could be set differently)
-        broker_topic_paths = [self._path_for_broker_topic(broker_id, topic) 
+        broker_topic_paths = [self.path_for_broker_topic(broker_id, topic) 
                               for broker_id in broker_ids]
         num_parts = map(self._zk_properties, broker_topic_paths)
         log.debug(u"num_parts: {0}".format(num_parts))
@@ -80,21 +156,21 @@ class ZKUtil(object):
                )
 
     def broker_ids_for(self, topic):
-        topic_path = self._path_for_topic(topic)
+        topic_path = self.path_for_topic(topic)
         return sorted(int(broker_id) for broker_id in self._zk_children(topic_path))
 
     def consumer_ids_for(self, topic, consumer_group):
         """For a given consumer group, return a list of all consumer_ids that
         are currently registered in that group."""
         # Gets the ids node below which are all consumer_ids in this group
-        cg_path = self._zk_path(self._path_for_consumer_ids(consumer_group))
+        cg_path = self.path_for_consumer_ids(consumer_group)
 
         # All consumer_ids for this group, but not all of them are necessarily
         # interested in our topic
-        consumer_ids_in_group = sorted(self._zk_util.children(cg_path).data)
-        consumer_id_paths = [self._path_for_consumer_id(consumer_id)
+        consumer_ids_in_group = sorted(self._zk_children(cg_path))
+        consumer_id_paths = [self.path_for_consumer_id(consumer_group, consumer_id)
                              for consumer_id in consumer_ids_in_group]
-        consumer_id_data = [self._zk_util.properties(path).data
+        consumer_id_data = [self._zk_properties(path) 
                             for path in consumer_id_paths]
 
         return [consumer_id for consumer_id, data
@@ -115,11 +191,13 @@ class ZKUtil(object):
         unicode) to the number of threads that this consumer has registered
         for this topic (in our case, always one).
         """
-        self._create_path(self._path_for_consumer_ids(consumer_group), consumer_id)
-
+        self._create_path_if_needed(self.path_for_consumer_ids(consumer_group),
+                                    consumer_id)
         # Create an emphermal node for this consumer
+        consumer_id_path = self.path_for_consumer_id(consumer_group, consumer_id)
+        print "Trying to create {0}".format(consumer_id_path)
         zookeeper.create(self._zk.handle, 
-                         u"{0}/{1}".format(consumer_ids_path, consumer_id),
+                         consumer_id_path,
                          json.dumps({topic : 1}), # topic : # of threads
                          ZKUtil.ACL,
                          zookeeper.EPHEMERAL)
@@ -145,7 +223,6 @@ class ZKUtil(object):
         created_so_far = []
         for node in nodes_to_create:
             created_path = _build_path(created_so_far)
-            print created_path
             if node and node not in self._zk.children(created_path).data:
                 node_to_create = _build_path(created_so_far + [node])
                 # If data is a string, we'll initialize the node with it...
@@ -154,30 +231,33 @@ class ZKUtil(object):
                 else:
                     init_data = json.dumps(data)
                 zookeeper.create(self._zk.handle, node_to_create, init_data, ZKUtil.ACL)
-
+                print "Created {0}".format(node_to_create)
             created_so_far.append(node)
 
-    def _path_for_broker_topic(self, broker_id, topic_name):
-        return "{0}/{1}".format(self._path_for_topic(topic_name), broker_id)
+    def path_for_broker_topic(self, broker_id, topic_name):
+        return "{0}/{1}".format(self.path_for_topic(topic_name), broker_id)
 
-    def _path_for_broker(self, broker_id):
+    def path_for_broker(self, broker_id):
         return "/brokers/ids/{0}".format(broker_id)
 
-    def _path_for_topics(self):
+    def path_for_topics(self):
         return "/brokers/topics"
 
-    def _path_for_topic(self, topic):
-        return "{0}/{1}".format(self._path_for_topics(), topic)
+    def path_for_topic(self, topic):
+        return "{0}/{1}".format(self.path_for_topics(), topic)
 
-    def _path_for_consumer_ids(self, consumer_group):
+    def path_for_consumer_ids(self, consumer_group):
         return u"/consumers/{0}/ids".format(consumer_group)
 
-    def _path_for_consumer_id(self, consumer_group, consumer_id):
-        return u"{0}/{1}".format(_path_for_consumer_ids(consumer_group),
+    def path_for_consumer_id(self, consumer_group, consumer_id):
+        return u"{0}/{1}".format(self.path_for_consumer_ids(consumer_group),
                                  consumer_id)
 
     def _zk_properties(self, path):
-        return self._zk.properties(path).data['string_value']
+        node_data = self._zk.properties(path).data
+        if 'string_value' in node_data:
+            return node_data['string_value']
+        return node_data
 
     def _zk_children(self, path):
         return self._zk.children(path).data
@@ -210,6 +290,9 @@ class ZKProducer(object):
     def broker_partitions(self):
         return self._broker_partitions[:]
 
+    def close(self):
+        self._zk_util.close()
+
     # FIXME: Change this behavior so that it's random if they don't specify
     #        an explicit key.
     def send(self, msgs, key=hash):
@@ -237,8 +320,11 @@ class ZKProducer(object):
     def _log_str(self, s):
         return u"ZKProducer {0} > {1}".format(self._id, s)
 
+    def __del__(self):
+        self.close()
 
-class Consumer(object):
+
+class ZKConsumer(object):
     """Take 2 on the rebalancing code."""
 
     def __init__(self, zk_conn, consumer_group, topic):
@@ -246,9 +332,12 @@ class Consumer(object):
         self._topic = topic
         self._zk_util = ZKUtil(zk_conn)
         self._consumer_group = consumer_group
+        self._needs_rebalance = True
 
         self._register()
-        self._rebalance()
+        self.rebalance()
+
+        self._register_callbacks()
 
     @property
     def id(self): return self._id
@@ -257,10 +346,31 @@ class Consumer(object):
     @property
     def consumer_group(self): return self._consumer_group
 
+    @property
+    def broker_partitions(self):
+        # this is wrong. we should first check to see if we need to rebalance,
+        # then rebalance, then send the actual # of broker partitions we are
+        # sending to.
+        if self._needs_rebalance:
+            self.rebalance()
+        return self._broker_partitions
+
+    @property
+    def brokers(self):
+        return sorted(frozenset(bp.broker_id for bp in self.broker_partitions))
+
+    def close(self):
+        self._zk_util.close()
+
+    # def fetch(self):
+    #     if self._needs_rebalance:
+    #         self.rebalance()
+    #     return chain()
+
     def _create_consumer_id(self, consumer_group_id):
         """Create a Consumer ID in the same way Kafka's reference client does"""
         hostname = platform.node()
-        ms_since_epoch = int(time() * 1000)
+        ms_since_epoch = int(time.time() * 1000)
         uuid_top_hex = uuid.uuid4().hex[:8]
         consumer_uuid = "{0}-{1}-{2}".format(hostname, ms_since_epoch, uuid_top_hex)
 
@@ -270,22 +380,71 @@ class Consumer(object):
         """Register ourselves as a consumer in this consumer_group"""
         self._zk_util.register_consumer(self.consumer_group, self.id, self.topic)
 
-    def _rebalance(self):
-        # Grab all possible partitions that we could send to...       
-        all_partitions = self._zk_util.broker_partitions_for(self.topic)
+    def rebalance(self):
+        """Rebalancing algorithm is slightly different from that described in
+        the design doc (mostly in the sense that the design doc algorithm will
+        leave partitions unassigned if there's an uneven distributions). The 
+        idea is that we split the partitions as evently as possible, and if
+        some consumers need to have more partitions than others, the extra 
+        partitions always go to the earlier consumers in the list. So you could
+        have a distribution like 4-4-4-4 or 5-5-4-4, but never 4-4-4-5.
+        """
+        log.info("Consumer {0}: Rebalance triggered".format(self.id))
+        # Get all the consumer_ids in my consumer_group who are listening to 
+        # this topic (this includes us).
+        all_topic_consumers = self._zk_util.consumer_ids_for(self.topic, 
+                                                             self.consumer_group)
+        # Where do I rank in the consumer_group list?
+        all_broker_partitions = self._zk_util.broker_partitions_for(self.topic)
+        try:
+            my_index = all_topic_consumers.index(self.id)
+        except ValueError:
+            msg_tmpl = "This consumer ({0}) not found list of consumers " +\
+                       "for this topic {1}: {2}"
+            raise ConsumerEntryNotFoundError(
+                msg_tmpl.format(self.id, self.topic, all_topic_consumers))
 
-        # Grab all consumers
-        all_consumers = self._zk_util.consumer_ids_for(self.topic)
+        bp_per_consumer = len(all_broker_partitions) / len(all_topic_consumers)
+        consumers_with_extra = range(len(all_broker_partitions) % len(all_topic_consumers))
+
+        # If the current consumer is among those that have an extra partition...
+        num_parts = bp_per_consumer + (1 if my_index in consumers_with_extra else 0)
+
+        # If the previous consumer was among the those that have an extra 
+        # partition, add my_index to account for the extra partitions
+        start = my_index * bp_per_consumer + \
+                (my_index if my_index - 1 in consumers_with_extra else 0)
+
+        ############## Set our state info... ##############
+        self._broker_partitions = all_broker_partitions[start:start+num_parts]
+        self._needs_rebalance = False
+        # This will collapse duplicates so we only have one conn per host/port
+        broker_conn_info = frozenset((bp.broker_id, bp.host, bp.port)
+                                     for bp in self._broker_partitions)
+        self._connections = dict((broker_id, Kafka(host, port))
+                                 for broker_id, host, port in broker_conn_info)
+
+        # Report our progress
+        log.info("Consumer {0}: Rebalance finished: {1}".format(self.id, unicode(self)))
 
 
+    def _unbalance(self, nodes):
+        """We use this so that rebalancing can happen at specific points (like
+        before we make a new fetch)"""
+        self._needs_rebalance = True
 
+    def _register_callbacks(self):
+        zk = self._zk_util._zk # FIXME: Evil breaking of encapsulation
+        consumer_watch = zk.children(self._zk_util.path_for_consumer_ids(self.consumer_group))
+        consumer_watch(self._unbalance)
+        broker_watch = zk.children("/brokers/ids")(self._unbalance)
+    
+    def __unicode__(self):
+        return ("ZKConsumer {0} attached to broker partitions {1}"
+                .format(self.id, self.broker_partitions))
 
-
-
-
-
-
-
+    def __del__(self):
+        self.close()
 
 
 

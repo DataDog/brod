@@ -38,7 +38,7 @@ from unittest import TestCase
 from zc.zk import ZooKeeper
 
 from brod import Kafka
-from brod.zk import ZKProducer
+from brod.zk import ZKConsumer, ZKProducer
 
 ZKConfig = namedtuple('ZKConfig', 'config_file data_dir client_port')
 KafkaConfig = namedtuple('KafkaConfig', 
@@ -56,13 +56,44 @@ log = logging.getLogger("brod.test_zk")
 
 class TestZK(TestCase):
 
-    def test_001_brokers_all_up(self):
+    def test_001_consumers_manual_rebalancing(self):
+        """Test that basic consumer rebalancing logic works..."""
+        TOTAL_NUM_BROKERS = NUM_BROKERS * NUM_PARTITIONS
+
         producer = ZKProducer(ZK_CONNECT_STR, "t1")
         self.assertEquals(len(producer.broker_partitions), 
-                          NUM_BROKERS * NUM_PARTITIONS)
+                          TOTAL_NUM_BROKERS,
+                          "We should be sending to all broker_partitions.")
+               
+        c1 = ZKConsumer(ZK_CONNECT_STR, "group1", "t1")
+        self.assertEquals(len(c1.broker_partitions), 
+                          TOTAL_NUM_BROKERS,
+                          "Only one consumer, it should have all partitions.")
+        c2 = ZKConsumer(ZK_CONNECT_STR, "group1", "t1")
+        self.assertEquals(len(c2.broker_partitions),
+                          (TOTAL_NUM_BROKERS) / 2)
+        c1.rebalance()
+        self.assertEquals(len(set(c1.broker_partitions + c2.broker_partitions)),
+                          TOTAL_NUM_BROKERS,
+                          "We should have all broker partitions covered.")
 
+        c3 = ZKConsumer(ZK_CONNECT_STR, "group1", "t1")
+        self.assertEquals(len(c3.broker_partitions),
+                          (NUM_BROKERS * NUM_PARTITIONS) / 3)
+        c1.rebalance()
+        c2.rebalance()
+        self.assertEquals(len(set(c1.broker_partitions + c2.broker_partitions + 
+                                  c3.broker_partitions)),
+                          TOTAL_NUM_BROKERS,
+                          "We should have all broker partitions covered with no overlap.")
+
+    def test_002_consumers(self):
+
+
+        return
+    
     def setUp(self):
-        timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%s')
+        timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%s_%f')
         self.run_dir = os.path.join("/tmp", "brod_zk_test", timestamp)
         os.makedirs(self.run_dir)
         log.info("ZooKeeper and Kafka data in {0}".format(self.run_dir))
@@ -115,7 +146,7 @@ class TestZK(TestCase):
             k = Kafka("localhost", kafka_config.port)
             for topic in ["t1", "t2", "t3"]:
                 k.produce(topic, ["bootstrap"], 0)
-        time.sleep(0.5)
+        time.sleep(1)
 
 
     def setup_zookeeper(self):
@@ -163,6 +194,7 @@ class TestZK(TestCase):
 
         log.info("Terminating ZooKeeper process {0}".format(self.zk_process))
         os.killpg(self.zk_process.pid, signal.SIGTERM)
+        time.sleep(3) # Let it die with dignity
 
     def _write_config(self, template_name, finished_location, format_obj):
         with open(self._template(template_name)) as template_file:
