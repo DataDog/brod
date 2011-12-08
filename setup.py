@@ -4,12 +4,11 @@ import setuptools
 
 install_requires = [
     "zc.zk==0.2.0",
-    "zc-zookeeper-static==3.3.3a1",
 ]
 
 setuptools.setup(
     name = 'brod',
-    version = '0.1.0',
+    version = '0.1.1',
     license = 'MIT',
     description = open('README.md').read(),
     author = "Datadog, Inc.",
