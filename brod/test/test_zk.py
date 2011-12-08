@@ -51,47 +51,75 @@ ZK_CONNECT_STR = "localhost:{0}".format(ZK_PORT)
 
 NUM_BROKERS = 3 # How many Kafka brokers we're going to spin up
 NUM_PARTITIONS = 5 # How many partitions per topic per broker
+TOTAL_NUM_PARTITIONS = NUM_BROKERS * NUM_PARTITIONS
 
 log = logging.getLogger("brod.test_zk")
 
 class TestZK(TestCase):
 
-    def test_001_consumers_manual_rebalancing(self):
-        """Test that basic consumer rebalancing logic works..."""
-        TOTAL_NUM_BROKERS = NUM_BROKERS * NUM_PARTITIONS
-
-        producer = ZKProducer(ZK_CONNECT_STR, "t1")
-        self.assertEquals(len(producer.broker_partitions), 
-                          TOTAL_NUM_BROKERS,
-                          "We should be sending to all broker_partitions.")
-               
-        c1 = ZKConsumer(ZK_CONNECT_STR, "group1", "t1")
-        self.assertEquals(len(c1.broker_partitions), 
-                          TOTAL_NUM_BROKERS,
-                          "Only one consumer, it should have all partitions.")
-        c2 = ZKConsumer(ZK_CONNECT_STR, "group1", "t1")
-        self.assertEquals(len(c2.broker_partitions),
-                          (TOTAL_NUM_BROKERS) / 2)
-        c1.rebalance()
-        self.assertEquals(len(set(c1.broker_partitions + c2.broker_partitions)),
-                          TOTAL_NUM_BROKERS,
-                          "We should have all broker partitions covered.")
-
-        c3 = ZKConsumer(ZK_CONNECT_STR, "group1", "t1")
-        self.assertEquals(len(c3.broker_partitions),
-                          (NUM_BROKERS * NUM_PARTITIONS) / 3)
-        c1.rebalance()
-        c2.rebalance()
-        self.assertEquals(len(set(c1.broker_partitions + c2.broker_partitions + 
-                                  c3.broker_partitions)),
-                          TOTAL_NUM_BROKERS,
-                          "We should have all broker partitions covered with no overlap.")
+    # def test_001_consumers_manual_rebalancing(self):
+    #     """Test that basic consumer rebalancing logic works..."""
+    #     for kafka_config in self.kafka_configs:
+    #        k = Kafka("localhost", kafka_config.port)
+    #        for topic in ["t1", "t2", "t3"]:
+    #           k.produce(topic, ["bootstrap"], 0)
+    #           time.sleep(1)
+    # 
+    #     producer = ZKProducer(ZK_CONNECT_STR, "t1")
+    #     self.assertEquals(len(producer.broker_partitions), 
+    #                       TOTAL_NUM_PARTITIONS,
+    #                       "We should be sending to all broker_partitions.")
+    #            
+    #     c1 = ZKConsumer(ZK_CONNECT_STR, "group1", "t1")
+    #     self.assertEquals(len(c1.broker_partitions), 
+    #                       TOTAL_NUM_PARTITIONS,
+    #                       "Only one consumer, it should have all partitions.")
+    #     c2 = ZKConsumer(ZK_CONNECT_STR, "group1", "t1")
+    #     self.assertEquals(len(c2.broker_partitions),
+    #                       (TOTAL_NUM_PARTITIONS) / 2)
+    #     c1.rebalance()
+    #     self.assertEquals(len(set(c1.broker_partitions + c2.broker_partitions)),
+    #                       TOTAL_NUM_PARTITIONS,
+    #                       "We should have all broker partitions covered.")
+    # 
+    #     c3 = ZKConsumer(ZK_CONNECT_STR, "group1", "t1")
+    #     self.assertEquals(len(c3.broker_partitions),
+    #                       (TOTAL_NUM_PARTITIONS) / 3)
+    #     c1.rebalance()
+    #     c2.rebalance()
+    #     self.assertEquals(len(set(c1.broker_partitions + c2.broker_partitions + 
+    #                               c3.broker_partitions)),
+    #                       TOTAL_NUM_PARTITIONS,
+    #                       "We should have all broker partitions covered with no overlap.")
 
     def test_002_consumers(self):
+        c1 = ZKConsumer(ZK_CONNECT_STR, "group002", "topic002")
+        
+        result = c1.fetch()
+        self.assertEquals(len(result), 0, "This shouldn't error, but it should be empty")
 
+        for kafka_config in self.kafka_configs:
+            k = Kafka("localhost", kafka_config.port)
+            for partition in range(NUM_PARTITIONS):
+                k.produce("topic002", ["hello"], partition)
+        time.sleep(2)
 
-        return
-    
+        # This should grab "hello" from every partition and every topic
+        c1.rebalance()
+        result = c1.fetch()
+        self.print_zk_snapshot()
+
+        self.assertEquals(len(set(result.broker_partitions)),
+                          TOTAL_NUM_PARTITIONS)
+        for msg_set in result:
+            print unicode(msg_set)
+            self.assertEquals(msg_set.messages, ["hello"])
+
+    def print_zk_snapshot(self):
+        # Dump all the ZooKeeper state at this point
+        zk = ZooKeeper(ZK_CONNECT_STR)
+        print zk.export_tree(ephemeral=True)
+
     def setUp(self):
         timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%s_%f')
         self.run_dir = os.path.join("/tmp", "brod_zk_test", timestamp)
@@ -129,24 +157,16 @@ class TestZK(TestCase):
             process = Popen(["kafka-run-class.sh",
                              "kafka.Kafka", 
                              kafka_config.config_file],
-                            stdout=open("{0}/{1}".format(self.run_dir, run_log), "wb"),
-                            stderr=open("{0}/{1}".format(self.run_dir, run_errs), "wb"),
-                            shell=False,
-                            preexec_fn=os.setsid,
-                            env=env,
+                             stdout=open("{0}/{1}".format(self.run_dir, run_log), "wb"),
+                             stderr=open("{0}/{1}".format(self.run_dir, run_errs), "wb"),
+                             shell=False,
+                             preexec_fn=os.setsid,
+                             env=env,
                       )
             self.kafka_processes.append(process)
         
         # Now give the Kafka instances a little time to spin up...
         time.sleep(3)
-
-        # FIXME: This is a kludge until we find out what's actually the right
-        # way to handle this situation
-        for kafka_config in self.kafka_configs:
-            k = Kafka("localhost", kafka_config.port)
-            for topic in ["t1", "t2", "t3"]:
-                k.produce(topic, ["bootstrap"], 0)
-        time.sleep(1)
 
 
     def setup_zookeeper(self):
