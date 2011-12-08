@@ -2,16 +2,22 @@
 
 import setuptools
 
+install_requires = [
+    "zc.zk==0.2.0",
+    "zc-zookeeper-static==3.3.3a1",
+]
+
 setuptools.setup(
-  name = 'brod',
-  version = '0.0.1',
-  license = 'MIT',
-  description = open('README.md').read(),
-  author = "Datadog, Inc.",
-  author_email = "packages@datadoghq.com",
-  url = 'https://github.com/datadog/brod',
-  platforms = 'any',
-  packages = ['brod'],
-  zip_safe = True,
-  verbose = False,
+    name = 'brod',
+    version = '0.1.0',
+    license = 'MIT',
+    description = open('README.md').read(),
+    author = "Datadog, Inc.",
+    author_email = "packages@datadoghq.com",
+    url = 'https://github.com/datadog/brod',
+    platforms = 'any',
+    packages = ['brod'],
+    zip_safe = True,
+    verbose = False,
+    install_requires=install_requires
 )

@@ -450,7 +450,6 @@ class ZKConsumer(object):
 
         self.rebalance()
 
-
     @property
     def id(self): return self._id
     @property
