@@ -105,7 +105,7 @@ class TestZK(TestCase):
         time.sleep(2)
 
         # This should grab "hello" from every partition and every topic
-        c1.rebalance()
+        # c1.rebalance()
         result = c1.fetch()
         self.print_zk_snapshot()
 
@@ -114,6 +114,8 @@ class TestZK(TestCase):
         for msg_set in result:
             print unicode(msg_set)
             self.assertEquals(msg_set.messages, ["hello"])
+        
+        # assert(False)
 
     def print_zk_snapshot(self):
         # Dump all the ZooKeeper state at this point

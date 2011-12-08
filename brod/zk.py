@@ -243,7 +243,8 @@ class ZKUtil(object):
                                     consumer_id)
         # Create an emphermal node for this consumer
         consumer_id_path = self.path_for_consumer_id(consumer_group, consumer_id)
-        print "Trying to create {0}".format(consumer_id_path)
+        log.info("Registering Consumer {0}, trying to create {1}"
+                 .format(consumer_id, consumer_id_path))
         zookeeper.create(self._zk.handle, 
                          consumer_id_path,
                          json.dumps({topic : 1}), # topic : # of threads
@@ -331,6 +332,9 @@ class ZKUtil(object):
 
     def path_for_broker_topic(self, broker_id, topic_name):
         return "{0}/{1}".format(self.path_for_topic(topic_name), broker_id)
+
+    def path_for_brokers(self):
+        return "/brokers/ids"
 
     def path_for_broker(self, broker_id):
         return "/brokers/ids/{0}".format(broker_id)
@@ -438,9 +442,14 @@ class ZKConsumer(object):
         self._broker_partitions = [] # This gets updated during rebalancing
 
         self._register()
+
+        self._topic_watch = None
+        self._topics_watch = None
+        self._consumers_watch = None
+        self._brokers_watch = None
+
         self.rebalance()
 
-        self._register_callbacks()
 
     @property
     def id(self): return self._id
@@ -558,8 +567,12 @@ class ZKConsumer(object):
         self._connections = dict((broker_id, Kafka(host, port))
                                  for broker_id, host, port in broker_conn_info)
 
+        # Register all our callbacks so we know when to do this next
+        self._register_callbacks()
+        if self._all_callbacks_registered():
+            self._needs_rebalance = False
+        
         # Report our progress
-        self._needs_rebalance = False
         log.info("Rebalance finished for Consumer {0}: {1}".format(self.id, unicode(self)))
 
 
@@ -568,15 +581,41 @@ class ZKConsumer(object):
         before we make a new fetch)"""
         self._needs_rebalance = True
 
+    def _all_callbacks_registered(self):
+        """Are all the callbacks we need to know when to rebalance actually 
+        registered? Some of these (like the topic ones) are the responsibility
+        of the broker to create. If they're not all registered yet, we need 
+        to be paranoid about rebalancing."""
+        return all([self._consumers_watch, 
+                    self._brokers_watch,
+                    self._brokers_watch,
+                    self._topic_watch])
+
     def _register_callbacks(self):
         zk = self._zk_util._zk # FIXME: Evil breaking of encapsulation
-        consumer_watch = zk.children(self._zk_util.path_for_consumer_ids(self.consumer_group))
-        consumer_watch(self._unbalance)
-        broker_watch = zk.children("/brokers/ids")(self._unbalance)
-    
+
+        # All this if None nonsense is there because some of these nodes
+        # need to be created by the broker but won't be until the topic is 
+        # created.
+        path_for_consumers = self._zk_util.path_for_consumer_ids(self.consumer_group)
+        path_for_brokers = self._zk_util.path_for_brokers()
+        path_for_topics = self._zk_util.path_for_topics()
+        path_for_topic = self._zk_util.path_for_topic(self.topic)
+        if self._consumers_watch is None and zk.exists(path_for_consumers):
+            self._consumers_watch = zk.children(path_for_consumers)(self._unbalance)
+        if self._brokers_watch is None and zk.exists(path_for_brokers):
+            self._brokers_watch = zk.children(path_for_brokers)(self._unbalance)
+        if self._topics_watch is None and zk.exists(path_for_topics):
+            self._topics_watch = zk.children(path_for_topics)(self._unbalance)
+        if self._topic_watch is None and zk.exists(path_for_topic):
+            self._topic_watch = zk.children(path_for_topic)(self._unbalance)
+
+        log.debug("Consumer {0} has watches: {1}"
+                  .format(self._id, sorted(zk.watches.data.keys())))
+
     def __unicode__(self):
         return ("ZKConsumer {0} attached to broker partitions {1}"
-                .format(self.id, self.broker_partitions))
+                .format(self.id, self._broker_partitions))
 
     def __del__(self):
         self.close()
