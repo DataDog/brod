@@ -5,7 +5,6 @@ TODO:
 * ZKUtil should be broken up into two pieces -- one with path info, the rest 
   to get folded into consumer and producer as necessary.
 """
-
 import json
 import logging
 import platform
@@ -17,143 +16,13 @@ from itertools import chain
 import zookeeper
 from zc.zk import ZooKeeper
 
-from brod.base import KafkaError
+from brod.base import BrokerPartition, FetchResult, KafkaError, MessageSet
 from brod.blocking import Kafka
 
 log = logging.getLogger('brod.zk')
 
 class NoAvailablePartitionsError(KafkaError): pass
 class ConsumerEntryNotFoundError(KafkaError): pass
-
-class BrokerPartition(namedtuple('BrokerPartition', 
-                                 'broker_id creator host port topic partition')):
-    @classmethod
-    def from_zk(cls, broker_id, broker_string, topic, num_parts):
-        """Generate a list of BrokerPartition objects based on various values
-        taken from ZooKeeper.
-
-        broker_id is this broker's ID to ZooKeeper. It's a simple integer, set
-        as the "brokerid" param in Kafka's server config file. You can find a
-        list of them by asking for the children of /brokers/ids in ZooKeeper.
-
-        broker_string is found in ZooKeeper at /brokers/ids/{broker_id}
-        The format of broker_string is assumed to be "creator:host:port",
-        though the creator can have the host embedded in it because of the
-        version of UUID that Kafka uses.
-
-        num_parts is the number of partitions for that broker and is located at
-        /brokers/topics/{topic}/{broker_id}
-        """
-        creator, host, port = broker_string.split(":")
-        num_parts = int(num_parts)
-
-        return [BrokerPartition(broker_id=int(broker_id), creator=creator,
-                                host=host, port=int(port), topic=topic,
-                                partition=i) 
-                for i in range(num_parts)]
-
-
-class FetchResult(object):
-    """A FetchResult is what's returned when we do a MULTIFETCH request. It 
-    can contain an arbitrary number of message sets, which it'll eventually
-    be able to query more intelligently than this. :-P
-
-    This should eventually move to base and be returned in a multifetch()
-    """
-
-    def __init__(self, message_sets):
-        self._message_sets = message_sets[:]
-
-    def __iter__(self):
-        return iter(self._message_sets)
-    
-    def __len__(self):
-        return len(self._message_sets)
-
-    def __getitem__(self, i):
-        return self._message_sets[i]
-    
-    @property
-    def broker_partitions(self):
-        return [msg_set.broker_partition for msg_set in self]
-
-
-class MessageSet(object):
-    """A collection of messages and offsets returned from a request made to
-    a single broker/topic/partition. Allows you to iterate via (offset, msg)
-    tuples and grab origin information.
-
-    ZK info might not be available if this came from a regular multifetch. This
-    should be moved to base.
-    """
-    def __init__(self, broker_partition, offsets_msgs):
-        self._offsets_msgs = offsets_msgs[:]
-        self._broker_partition = broker_partition
-    
-    ################## Where did I come from? ##################
-    @property
-    def broker_partition(self):
-        return self._broker_partition
-
-    @property
-    def topic(self):
-        return self.broker_partition.topic
-
-    ################## What do I have inside? ##################
-    @property
-    def offsets(self):
-        return [offset for offset, msg in self]
-
-    @property
-    def messages(self):
-        return [msg for offset, msg in self]
-
-    @property
-    def start_offset(self):
-        return self.offsets[0] if self else None
-    
-    @property
-    def end_offset(self):
-        return self.offsets[-1] if self else None
-
-    @property
-    def next_offset(self):
-        # FIXME FIXME FIXME: This calcuation should be done at a much deeper
-        # level, or else this won't work with compressed messages, or be able
-        # to detect the difference between 0.6 and 0.7 headers
-        if not self:
-            return None
-
-        MESSAGE_HEADER_SIZE = 10
-        last_offset, last_msg = self._offsets_msgs[-1]
-        next_offset = last_offset + len(last_msg) + MESSAGE_HEADER_SIZE
-        return next_offset
-
-    @property
-    def size(self):
-        return sum(len(msg) for msg in self.messages)
-
-    def __iter__(self):
-        return iter(self._offsets_msgs)
-    
-    def __len__(self):
-        return len(self._offsets_msgs)
-
-    def __cmp__(self, other):
-        bp_cmp = cmp(self.broker_partition, other.broker_partition)
-        if bp_cmp:
-            return bp_cmp
-        else:
-            return cmp(self._offsets_msgs, other.offsets_msgs)
-
-    def __unicode__(self):
-        return "Broker Partition: {0}\nContents: {1}".format(self.broker_partition, self._offsets_msgs)
-
-    ################## Parse from binary ##################
-    @classmethod
-    def parse(self, broker_partition, data):
-        raise NotImplementedError()
-
 
 class ZKUtil(object):
 
@@ -195,6 +64,42 @@ class ZKUtil(object):
                        in zip(broker_ids, broker_strings, num_parts)
                    )
                )
+
+    def offsets_state(self, consumer_group):
+        """For a given consumer_group, get back a ZK state dict that looks like:
+        
+        {
+            "topic1" : {
+                "1-0" : 1002830,
+                "1-1" : 1201221,  
+                "2-0" : 3232445,
+                "2-1" : 2309495
+            }
+            "topic2" : {
+                "1-0" : 1002830,
+                "1-1" : 1201221,  
+                "2-0" : 3232445,
+                "2-1" : 2309495
+            }
+        }
+
+        Keys are topic names for that consumer group, and the values are the 
+        children in ZooKeeper -- other dicts with keys that are 
+        {broker_id}-{partition_id} to offsets.
+        """
+        def topic_offsets(topic):
+            broker_parts_path = self.path_for_offsets(consumer_group, topic)
+            broker_parts = self._zk_children(broker_parts_path)
+            return dict((bp, int(self._zk_properties(broker_parts_path + "/" + bp)))
+                        for bp in broker_parts)
+
+        state = {}
+        topics = self._zk_children("/consumers/{0}/offsets".format(consumer_group))
+        for topic in topics:
+            state[topic] = topic_offsets(topic)
+        
+        return state
+
 
     def broker_ids_for(self, topic):
         topic_path = self.path_for_topic(topic)
@@ -313,11 +218,10 @@ class ZKUtil(object):
             # The topic might not exist at all, in which case no broker has 
             # anything, so there's no point in making the offsets nodes and such
             if self._zk.exists(self.path_for_topic(bp.topic)):
-                for bp, next_offset in bps_to_next_offsets.items():
-                    offset_path = self.path_for_offset(consumer_group, 
-                                                       bp.topic, 
-                                                       bp.broker_id,
-                                                       bp.partition)
+                offset_path = self.path_for_offset(consumer_group, 
+                                                   bp.topic, 
+                                                   bp.broker_id,
+                                                   bp.partition)
                 try:
                     offset_node = self._zk.properties(offset_path)
                 except zookeeper.NoNodeException as ex:
@@ -328,7 +232,8 @@ class ZKUtil(object):
                 # None is the default value when we don't know what the next
                 # offset is, possibly because the MessageSet is empty...
                 if next_offset is not None:
-                    offset_node.set(string_data=str(next_offset))
+                    print "Node %s: setting to %s" % (offset_node, next_offset)
+                    offset_node.set(string_value=str(next_offset))
 
     def path_for_broker_topic(self, broker_id, topic_name):
         return "{0}/{1}".format(self.path_for_topic(topic_name), broker_id)
@@ -434,6 +339,7 @@ class ZKConsumer(object):
     """Take 2 on the rebalancing code."""
 
     def __init__(self, zk_conn, consumer_group, topic):
+        """FIXME: switch arg order and default zk_conn to localhost?"""
         self._id = self._create_consumer_id(consumer_group)
         self._topic = topic
         self._zk_util = ZKUtil(zk_conn)
@@ -506,6 +412,18 @@ class ZKConsumer(object):
         self._zk_util.save_offsets_for(self.consumer_group, bps_to_next_offsets)
 
         return result
+
+    def poll(self,
+             start_offsets=None,
+             end_offsets=None,
+             poll_interval=1,
+             max_size=None,
+             retry_limit=3):
+        """FIXME: start/end, retry_limit"""
+        while True:
+            for msg_set in self.fetch(max_size=max_size):
+                yield msg_set
+            time.sleep(poll_interval)
 
     def _create_consumer_id(self, consumer_group_id):
         """Create a Consumer ID in the same way Kafka's reference client does"""

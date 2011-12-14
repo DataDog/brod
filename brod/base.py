@@ -25,6 +25,8 @@ __all__ = [
     'Lengths',
 ]
 
+VERSION_0_7 = False
+
 class KafkaError(Exception): pass
 class ConnectionFailure(KafkaError): pass
 class OffsetOutOfRange(KafkaError): pass
@@ -70,6 +72,158 @@ class Lengths(object):
     COMPRESSION = 1
     CHECKSUM = 4
     MESSAGE_HEADER = MESSAGE_LENGTH + MAGIC + CHECKSUM
+
+
+class BrokerPartition(namedtuple('BrokerPartition', 
+                                 'broker_id creator host port topic partition')):
+    @classmethod
+    def from_zk(cls, broker_id, broker_string, topic, num_parts):
+        """Generate a list of BrokerPartition objects based on various values
+        taken from ZooKeeper.
+
+        broker_id is this broker's ID to ZooKeeper. It's a simple integer, set
+        as the "brokerid" param in Kafka's server config file. You can find a
+        list of them by asking for the children of /brokers/ids in ZooKeeper.
+
+        broker_string is found in ZooKeeper at /brokers/ids/{broker_id}
+        The format of broker_string is assumed to be "creator:host:port",
+        though the creator can have the host embedded in it because of the
+        version of UUID that Kafka uses.
+
+        num_parts is the number of partitions for that broker and is located at
+        /brokers/topics/{topic}/{broker_id}
+        """
+        creator, host, port = broker_string.split(":")
+        num_parts = int(num_parts)
+
+        return [BrokerPartition(broker_id=int(broker_id), creator=creator,
+                                host=host, port=int(port), topic=topic,
+                                partition=i) 
+                for i in range(num_parts)]
+
+
+class FetchResult(object):
+    """A FetchResult is what's returned when we do a MULTIFETCH request. It 
+    can contain an arbitrary number of message sets, which it'll eventually
+    be able to query more intelligently than this. :-P
+
+    This should eventually move to base and be returned in a multifetch()
+    """
+
+    def __init__(self, message_sets):
+        self._message_sets = message_sets[:]
+
+    def __iter__(self):
+        return iter(self._message_sets)
+    
+    def __len__(self):
+        return len(self._message_sets)
+
+    def __getitem__(self, i):
+        return self._message_sets[i]
+    
+    @property
+    def broker_partitions(self):
+        return [msg_set.broker_partition for msg_set in self]
+
+
+class MessageSet(object):
+    """A collection of messages and offsets returned from a request made to
+    a single broker/topic/partition. Allows you to iterate via (offset, msg)
+    tuples and grab origin information.
+
+    ZK info might not be available if this came from a regular multifetch. This
+    should be moved to base.
+    """
+    def __init__(self, broker_partition, offsets_msgs):
+        self._offsets_msgs = offsets_msgs[:]
+        self._broker_partition = broker_partition
+    
+    ################## Where did I come from? ##################
+    @property
+    def broker_partition(self):
+        return self._broker_partition
+
+    @property
+    def topic(self):
+        return self.broker_partition.topic
+
+    ################## What do I have inside? ##################
+    @property
+    def offsets(self):
+        return [offset for offset, msg in self]
+
+    @property
+    def messages(self):
+        return [msg for offset, msg in self]
+
+    @property
+    def start_offset(self):
+        return self.offsets[0] if self else None
+    
+    @property
+    def end_offset(self):
+        return self.offsets[-1] if self else None
+
+    @property
+    def next_offset(self):
+        # FIXME FIXME FIXME: This calcuation should be done at a much deeper
+        # level, or else this won't work with compressed messages, or be able
+        # to detect the difference between 0.6 and 0.7 headers
+        if not self:
+            return None
+
+        MESSAGE_HEADER_SIZE = 10 if VERSION_0_7 else 9
+        last_offset, last_msg = self._offsets_msgs[-1]
+        next_offset = last_offset + len(last_msg) + MESSAGE_HEADER_SIZE
+        return next_offset
+
+    @property
+    def size(self):
+        return sum(len(msg) for msg in self.messages)
+
+    def __iter__(self):
+        return iter(self._offsets_msgs)
+    
+    def __len__(self):
+        return len(self._offsets_msgs)
+
+    def __cmp__(self, other):
+        bp_cmp = cmp(self.broker_partition, other.broker_partition)
+        if bp_cmp:
+            return bp_cmp
+        else:
+            return cmp(self._offsets_msgs, other.offsets_msgs)
+
+    def __unicode__(self):
+        return "Broker Partition: {0}\nContents: {1}".format(self.broker_partition, self._offsets_msgs)
+
+    ################## Parse from binary ##################
+    @classmethod
+    def parse(self, data_buff):
+        pass
+        # 
+        # MIN_MSG_SIZE = Lengths.MESSAGE_LENGTH + Lengths.MAGIC + Lengths.CHECKSUM
+# 
+        # def parse_message(msg_len, msg_data):
+        #     pass
+# 
+        # req_len, req_type, topic_len = struct.unpack(">IHH", data_buff.read(12))
+        # topic = unicode(buffer.read(topic_len), encoding='utf-8')
+# 
+# 
+        # # data_len = 
+# 
+        # message_buffer.read(Lengths.MESSAGE_LENGTH)
+# 
+        # messages = [parse_message(msg_data) for msg_data in data]
+# 
+        # message_buffer.read(Lengths.MESSAGE_LENGTH)
+# 
+# 
+# 
+        # raise NotImplementedError()
+
 
 class BaseKafka(object):
     MAX_RETRY = 3
