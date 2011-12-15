@@ -14,7 +14,7 @@ from collections import namedtuple, Mapping
 from itertools import chain
 
 import zookeeper
-from zc.zk import ZooKeeper
+from zc.zk import ZooKeeper, FailedConnect
 
 from brod.base import BrokerPartition, FetchResult, KafkaError, MessageSet
 from brod.blocking import Kafka
@@ -23,6 +23,7 @@ log = logging.getLogger('brod.zk')
 
 class NoAvailablePartitionsError(KafkaError): pass
 class ConsumerEntryNotFoundError(KafkaError): pass
+class ZKConnectError(KafkaError): pass
 
 class ZKUtil(object):
 
@@ -31,7 +32,10 @@ class ZKUtil(object):
 
     """Abstracts all Kafka-specific ZooKeeper access."""
     def __init__(self, zk_conn_str):
-        self._zk = ZooKeeper(zk_conn_str)
+        try:
+            self._zk = ZooKeeper(zk_conn_str)
+        except FailedConnect as e:
+            raise ZKConnectError(e)
     
     def close(self):
         self._zk.close()
