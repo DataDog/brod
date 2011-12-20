@@ -16,7 +16,7 @@ from itertools import chain
 import zookeeper
 from zc.zk import ZooKeeper, FailedConnect
 
-from brod.base import BrokerPartition, FetchResult, KafkaError, MessageSet
+from brod.base import BrokerPartition, ConsumerStats, FetchResult, KafkaError, MessageSet
 from brod.blocking import Kafka
 
 log = logging.getLogger('brod.zk')
@@ -368,6 +368,8 @@ class ZKConsumer(object):
         # Force a rebalance so we know which broker-partitions we own
         self.rebalance()
 
+        self._stats = ConsumerStats(fetches=0, bytes=0, messages=0, max_fetch=0)
+
     @property
     def id(self): return self._id
     @property
@@ -376,6 +378,8 @@ class ZKConsumer(object):
     def consumer_group(self): return self._consumer_group
     @property
     def autocommit(self): return self._autocommit
+    @property
+    def stats(self): return self._stats
 
     @property
     def broker_partitions(self):
@@ -428,18 +432,24 @@ class ZKConsumer(object):
                                        offset,
                                        partition=bp.partition,
                                        max_size=max_size)
-            message_sets.append(MessageSet(bp, offsets_msgs))
+            message_sets.append(MessageSet(bp, offsets_msgs, offset))
         
         result = FetchResult(sorted(message_sets))
 
         # Now persist our new offsets
         self._bps_to_next_offsets = dict((msg_set.broker_partition, msg_set.next_offset)
                                          for msg_set in result)
+        log.debug(self._bps_to_next_offsets)
         if self._autocommit:
             self.commit_offsets()
 
+        old_stats = self._stats  # fetches bytes messages max_fetch
+        self._stats = ConsumerStats(fetches=old_stats.fetches + 1,
+                                    bytes=old_stats.bytes + result.num_bytes,
+                                    messages=old_stats.messages + result.num_messages,
+                                    max_fetch=max(old_stats.max_fetch, result.num_bytes))
         return result
-    
+
     def commit_offsets(self):
         if self._bps_to_next_offsets:
             self._zk_util.save_offsets_for(self.consumer_group, 

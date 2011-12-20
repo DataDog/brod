@@ -23,6 +23,7 @@ __all__ = [
     'LATEST_OFFSET',
     'EARLIEST_OFFSET',
     'Lengths',
+    'ConsumerStats'
 ]
 
 VERSION_0_7 = False
@@ -73,7 +74,6 @@ class Lengths(object):
     CHECKSUM = 4
     MESSAGE_HEADER = MESSAGE_LENGTH + MAGIC + CHECKSUM
 
-
 class BrokerPartition(namedtuple('BrokerPartition', 
                                  'broker_id partition creator host port topic')):
     @classmethod
@@ -101,6 +101,23 @@ class BrokerPartition(namedtuple('BrokerPartition',
                                 topic=topic) 
                 for i in range(num_parts)]
 
+class ConsumerStats(namedtuple('ConsumerStats',
+                               'fetches bytes messages max_fetch')):
+
+    def _human_bytes(self, bytes):
+        bytes = float(bytes)
+        TB, GB, MB, KB = 1024**4, 1024**3, 1024**2, 1024   
+        if bytes >= TB:     return '%.2fTB' % (bytes / TB)
+        elif bytes >= GB:   return '%.2fGB' % (bytes / GB)
+        elif bytes >= MB:   return '%.2fMB' % (bytes / MB)
+        elif bytes >= KB:   return '%.2fKB' % (bytes / KB)
+        else:               return '%.2fB' % bytes
+
+    def __str__(self):
+        return ("ConsumerStats: fetches={0}, bytes={1}, messages={2}, max_fetch={3}"
+                .format(self.fetches, self._human_bytes(self.bytes), 
+                        self.messages, self.max_fetch))
+
 
 class FetchResult(object):
     """A FetchResult is what's returned when we do a MULTIFETCH request. It 
@@ -125,6 +142,14 @@ class FetchResult(object):
     @property
     def broker_partitions(self):
         return [msg_set.broker_partition for msg_set in self]
+    
+    @property
+    def num_messages(self):
+        return sum(len(msg_set) for msg_set in self)
+    
+    @property
+    def num_bytes(self):
+        return sum(msg_set.size for msg_set in self)
 
 
 class MessageSet(object):
@@ -135,9 +160,10 @@ class MessageSet(object):
     ZK info might not be available if this came from a regular multifetch. This
     should be moved to base.
     """
-    def __init__(self, broker_partition, offsets_msgs):
+    def __init__(self, broker_partition, offsets_msgs, start_offset):
         self._offsets_msgs = offsets_msgs[:]
         self._broker_partition = broker_partition
+        self._start_offset = start_offset
     
     ################## Where did I come from? ##################
     @property
@@ -171,7 +197,7 @@ class MessageSet(object):
         # level, or else this won't work with compressed messages, or be able
         # to detect the difference between 0.6 and 0.7 headers
         if not self:
-            return None
+            return self._start_offset # We didn't read anything
 
         MESSAGE_HEADER_SIZE = 10 if VERSION_0_7 else 9
         last_offset, last_msg = self._offsets_msgs[-1]
@@ -223,6 +249,8 @@ class MessageSet(object):
 # 
 # 
         # raise NotImplementedError()
+
+
 
 
 class BaseKafka(object):
@@ -394,10 +422,10 @@ class BaseKafka(object):
                     corrupt = False
 
                 if include_corrupt:
-                    kafka_log.debug('message {0}: (offset: {1}, {2} bytes, corrupt: {3})'.format(payload, offset, message_length, corrupt))
+                    # kafka_log.debug('message {0}: (offset: {1}, {2} bytes, corrupt: {3})'.format(payload, offset, message_length, corrupt))
                     yield offset, payload, corrupt
                 else:
-                    kafka_log.debug('message {0}: (offset: {1}, {2} bytes)'.format(payload, offset, message_length))
+                    # kafka_log.debug('message {0}: (offset: {1}, {2} bytes)'.format(payload, offset, message_length))
                     yield offset, payload
         except:
             kafka_log.error("Unexpected error:{0}".format(sys.exc_info()[0]))
