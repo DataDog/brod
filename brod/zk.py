@@ -342,22 +342,30 @@ class ZKProducer(object):
 class ZKConsumer(object):
     """Take 2 on the rebalancing code."""
 
-    def __init__(self, zk_conn, consumer_group, topic):
+    def __init__(self, zk_conn, consumer_group, topic, autocommit=True):
         """FIXME: switch arg order and default zk_conn to localhost?"""
+        # Simple attributes we return as properties
         self._id = self._create_consumer_id(consumer_group)
         self._topic = topic
-        self._zk_util = ZKUtil(zk_conn)
         self._consumer_group = consumer_group
+        self._autocommit = autocommit
+
+        # Internal vars
+        self._zk_util = ZKUtil(zk_conn) 
         self._needs_rebalance = True
-        self._broker_partitions = [] # This gets updated during rebalancing
+        self._broker_partitions = [] # Updated during rebalancing
+        self._bps_to_next_offsets = None # Updated after a successful fetch
 
-        self._register()
-
+        # These are to handle ZooKeeper notification subscriptions.
         self._topic_watch = None
         self._topics_watch = None
         self._consumers_watch = None
         self._brokers_watch = None
 
+        # Register ourselves with ZK so other Consumers know we're active.
+        self._register()
+
+        # Force a rebalance so we know which broker-partitions we own
         self.rebalance()
 
     @property
@@ -366,6 +374,8 @@ class ZKConsumer(object):
     def topic(self): return self._topic
     @property
     def consumer_group(self): return self._consumer_group
+    @property
+    def autocommit(self): return self._autocommit
 
     @property
     def broker_partitions(self):
@@ -381,12 +391,24 @@ class ZKConsumer(object):
         self._zk_util.close()
 
     def fetch(self, max_size=None):
+        """Return a FetchResult, which can be iterated over as a list of 
+        MessageSets.
+
+        FIXME: This is where the adjustment needs to happen. Regardless of 
+        whether a rebalance has occurred or not, we can very easily see if we
+        are still responsible for the same partitions as we were the last time
+        we ran, and set self._bps_to_next_offsets --> we just need to check if
+        it's not None and if we still have the same offsets, and adjust 
+        accordingly.
+        """
         log.debug("Fetch called on Consumer {0}".format(self._id))
         if self._needs_rebalance:
             self.rebalance()
 
-        # Find where we're starting from
-        bps_to_offsets = self._zk_util.offsets_for(self.consumer_group,
+        # Find where we're starting from -- either from our last fetch, or from
+        # ZooKeeper.
+        bps_to_offsets = self._bps_to_next_offsets or \
+                         self._zk_util.offsets_for(self.consumer_group,
                                                    self._id,
                                                    self.broker_partitions)
         
@@ -409,13 +431,19 @@ class ZKConsumer(object):
             message_sets.append(MessageSet(bp, offsets_msgs))
         
         result = FetchResult(sorted(message_sets))
-        bps_to_next_offsets = dict((msg_set.broker_partition, msg_set.next_offset)
-                                   for msg_set in result)
 
         # Now persist our new offsets
-        self._zk_util.save_offsets_for(self.consumer_group, bps_to_next_offsets)
+        self._bps_to_next_offsets = dict((msg_set.broker_partition, msg_set.next_offset)
+                                         for msg_set in result)
+        if self._autocommit:
+            self.commit_offsets()
 
         return result
+    
+    def commit_offsets(self):
+        if self._bps_to_next_offsets:
+            self._zk_util.save_offsets_for(self.consumer_group, 
+                                           self._bps_to_next_offsets)
 
     def poll(self,
              start_offsets=None,
@@ -444,17 +472,43 @@ class ZKConsumer(object):
         # self._zk_util.create_path_if_needed()
 
     def rebalance(self):
-        """Rebalancing algorithm is slightly different from that described in
+        """Figure out which brokers and partitions we should be consuming from,
+        based on the latest information about the other consumers and brokers
+        that are present.
+
+        We registered for notifications from ZooKeeper whenever a broker or 
+        consumer enters or leaves the pool. But we usually only rebalance right
+        before we're about to take an action like fetching.
+
+        The rebalancing algorithm is slightly different from that described in
         the design doc (mostly in the sense that the design doc algorithm will
         leave partitions unassigned if there's an uneven distributions). The 
         idea is that we split the partitions as evently as possible, and if
         some consumers need to have more partitions than others, the extra 
         partitions always go to the earlier consumers in the list. So you could
         have a distribution like 4-4-4-4 or 5-5-4-4, but never 4-4-4-5.
+
+        Rebalancing has special consequences if the Consumer is doing manual 
+        commits (autocommit=False):
+
+        1. This Consumer will keep using the in memory offset state for all 
+           BrokerPartitions that it was already following before the rebalance.
+        2. The offset state for any new BrokerPartitions that this Consumer is
+           responsible for after the rebalance will be read from ZooKeeper.
+        3. For those BrokerPartitions that this Consumer was reading but is no
+           longer responsible for after the rebalance, the offset state is 
+           simply discarded. It is not persisted to ZooKeeper.
+        
+        So there is no guarantee of single delivery in this circumstance. If 
+        BrokerPartition 1-0 shifts ownership from Consumer A to Consumer B in 
+        the rebalance, Consumer B will pick up from the last manual commit of 
+        Consumer A -- *not* the offset that Consumer A was at when the rebalance
+        was triggered.
         """
         log.info(("Rebalance triggered for Consumer {0}, broker partitions " + \
                   "before rebalance: {1}").format(self.id, self._broker_partitions))
-        # Get all the consumer_ids in my consumer_group who are listening to 
+
+        # Get all the consumer_ids in our consumer_group who are listening to 
         # this topic (this includes us).
         all_topic_consumers = self._zk_util.consumer_ids_for(self.topic, 
                                                              self.consumer_group)
@@ -499,7 +553,7 @@ class ZKConsumer(object):
 
     def _unbalance(self, nodes):
         """We use this so that rebalancing can happen at specific points (like
-        before we make a new fetch)"""
+        before we make a new fetch)."""
         self._needs_rebalance = True
 
     def _all_callbacks_registered(self):

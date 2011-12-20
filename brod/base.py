@@ -75,7 +75,7 @@ class Lengths(object):
 
 
 class BrokerPartition(namedtuple('BrokerPartition', 
-                                 'broker_id creator host port topic partition')):
+                                 'broker_id partition creator host port topic')):
     @classmethod
     def from_zk(cls, broker_id, broker_string, topic, num_parts):
         """Generate a list of BrokerPartition objects based on various values
@@ -96,9 +96,9 @@ class BrokerPartition(namedtuple('BrokerPartition',
         creator, host, port = broker_string.split(":")
         num_parts = int(num_parts)
 
-        return [BrokerPartition(broker_id=int(broker_id), creator=creator,
-                                host=host, port=int(port), topic=topic,
-                                partition=i) 
+        return [BrokerPartition(broker_id=int(broker_id), partition=i,
+                                creator=creator, host=host, port=int(port), 
+                                topic=topic) 
                 for i in range(num_parts)]
 
 
