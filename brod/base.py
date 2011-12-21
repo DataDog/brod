@@ -76,6 +76,10 @@ class Lengths(object):
 
 class BrokerPartition(namedtuple('BrokerPartition', 
                                  'broker_id partition creator host port topic')):
+    @property
+    def id(self):
+        return "{0.broker_id}-{1.partition}".format(self)
+
     @classmethod
     def from_zk(cls, broker_id, broker_string, topic, num_parts):
         """Generate a list of BrokerPartition objects based on various values
@@ -160,10 +164,10 @@ class MessageSet(object):
     ZK info might not be available if this came from a regular multifetch. This
     should be moved to base.
     """
-    def __init__(self, broker_partition, offsets_msgs, start_offset):
-        self._offsets_msgs = offsets_msgs[:]
+    def __init__(self, broker_partition, start_offset, offsets_msgs):
         self._broker_partition = broker_partition
         self._start_offset = start_offset
+        self._offsets_msgs = offsets_msgs[:]
     
     ################## Where did I come from? ##################
     @property
@@ -336,7 +340,17 @@ class BaseKafka(object):
             partial(self._wrote_request_size, request, 
                 partial(self._read_offset_response, callback)))
 
-        
+    def earliest_offset(self, topic, partition):
+        """Return the first offset we have a message for."""
+        return self.offsets(topic, EARLIEST_OFFSET, max_offsets=1, partition=partition)[0]
+    
+    def latest_offset(self, topic, partition):
+        """Return the latest offset we can request. Note that this is the offset
+        *after* the last known message in the queue. The offset this method 
+        returns will not have a message in it at the time you call it, but it's
+        where the next message *will* be placed, whenever it arrives."""
+        return self.offsets(topic, LATEST_OFFSET, max_offsets=1, partition=partition)[0]
+    
     # Helper methods
     
     @staticmethod

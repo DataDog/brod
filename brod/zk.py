@@ -392,7 +392,33 @@ class ZKConsumer(object):
         return sorted(frozenset(bp.broker_id for bp in self.broker_partitions))
 
     def close(self):
-        self._zk_util.close()
+        if hasattr(self, '_zk_util'):
+            self._zk_util.close()
+    
+    def simple_consumer(self, bp_ids_to_offsets):
+        """bp_pairs_to_offsets is a dictionary of tuples to integers like the
+        following:
+
+        {
+            "0-0" : 2038903,
+            "0-1" : 3930198,
+            "1-0" : 3932088,
+            "1-1" : 958
+        }
+
+        The keys are of the format "[broker_id]-[partition_id]".
+
+        The values are offsets.
+
+        This method will return a SimpleConsumer that is initialied to read from
+        the brokers listed at the offsets specified.
+        """
+        all_broker_partitions = self._zk_util.broker_partitions_for(self.topic)
+        broker_partitions = dict((bp, bp_ids_to_offsets(bp.id))
+                                 for bp in all_broker_partitions
+                                 if bp.id in bp_ids_to_offsets)
+        
+        return SimpleConsumer(self.topic, broker_partitions)
 
     def fetch(self, max_size=None):
         """Return a FetchResult, which can be iterated over as a list of 
@@ -405,7 +431,7 @@ class ZKConsumer(object):
         it's not None and if we still have the same offsets, and adjust 
         accordingly.
         """
-        log.debug("Fetch called on Consumer {0}".format(self._id))
+        log.debug("Fetch called on ZKConsumer {0}".format(self.id))
         if self._needs_rebalance:
             self.rebalance()
 
@@ -432,14 +458,13 @@ class ZKConsumer(object):
                                        offset,
                                        partition=bp.partition,
                                        max_size=max_size)
-            message_sets.append(MessageSet(bp, offsets_msgs, offset))
+            message_sets.append(MessageSet(bp, offset, offsets_msgs))
         
         result = FetchResult(sorted(message_sets))
 
         # Now persist our new offsets
         self._bps_to_next_offsets = dict((msg_set.broker_partition, msg_set.next_offset)
                                          for msg_set in result)
-        log.debug(self._bps_to_next_offsets)
         if self._autocommit:
             self.commit_offsets()
 
