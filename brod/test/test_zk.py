@@ -32,8 +32,11 @@ import subprocess
 import time
 from collections import namedtuple
 from datetime import datetime
+from itertools import chain
 from subprocess import Popen
 from unittest import TestCase
+
+from nose.tools import *
 
 from zc.zk import ZooKeeper
 
@@ -55,183 +58,205 @@ TOTAL_NUM_PARTITIONS = NUM_BROKERS * NUM_PARTITIONS
 
 log = logging.getLogger("brod.test_zk")
 
-class TestZK(TestCase):
+######################### Module Level Vars for Runs ###########################
+# These get reset every time that teardown/setup() is run. If your test requires
+# a clean state, it should use the @with_setup() decorator. Otherwise, we leave
+# the instances up to make tests run faster.
 
-    def test_001_consumers_manual_rebalancing(self):
-        """Test that basic consumer rebalancing logic works..."""
-        for kafka_config in self.kafka_configs:
-           k = Kafka("localhost", kafka_config.port)
-           for topic in ["t1", "t2", "t3"]:
-              k.produce(topic, ["bootstrap"], 0)
-              time.sleep(1)
+kafka_configs = None
+kafka_processes = None
+run_dir = None
+zk_config = None
+zk_process = None
+
+def setup():
+    global kafka_configs, kafka_processes, run_dir, zk_config, zk_process
+
+    # For those tests that ask for new server instances -- kill the old one.
+    if run_exists():
+        teardown()
+
+    timestamp = datetime.now().strftime('%Y-%m-%d-%H_%M_%s_%f')
+    run_dir = os.path.join("/tmp", "brod_zk_test", timestamp)
+    os.makedirs(run_dir)
+    log.info("ZooKeeper and Kafka data in {0}".format(run_dir))
+
+    # Set up configuration and data directories for ZK and Kafka
+    zk_config = setup_zookeeper()
+    kafka_configs = setup_kafka(NUM_BROKERS, NUM_PARTITIONS)
+
+    # Start ZooKeeper...
+    log.info("Starting ZooKeeper with config {0}".format(zk_config))
+    zk_process = Popen(["kafka-run-class.sh",
+                         "org.apache.zookeeper.server.quorum.QuorumPeerMain",
+                         zk_config.config_file],
+                        stdout=open(run_dir + "/zookeeper.log", "wb"),
+                        stderr=open(run_dir + "/zookeeper_error.log", "wb"),
+                        shell=False,
+                        preexec_fn=os.setsid)
+    # Give ZK a little time to finish starting up before we start spawning
+    # Kafka instances to connect to it.
+    time.sleep(3)
+
+    # Start Kafka. We use kafka-run-class.sh instead of 
+    # kafka-server-start.sh because the latter sets the JMX_PORT to 9999
+    # and we want to set it differently for each Kafka instance
+    kafka_processes = []
+    for kafka_config in kafka_configs:
+        env = os.environ.copy()
+        env["JMX_PORT"] = str(kafka_config.jmx_port)
+        log.info("Starting Kafka with config {0}".format(kafka_config))
+        run_log = "kafka_{0}.log".format(kafka_config.broker_id)
+        run_errs = "kafka_error_{0}.log".format(kafka_config.broker_id)
+        process = Popen(["kafka-run-class.sh",
+                         "kafka.Kafka", 
+                         kafka_config.config_file],
+                         stdout=open("{0}/{1}".format(run_dir, run_log), "wb"),
+                         stderr=open("{0}/{1}".format(run_dir, run_errs), "wb"),
+                         shell=False,
+                         preexec_fn=os.setsid,
+                         env=env)
+        kafka_processes.append(process)
     
-        producer = ZKProducer(ZK_CONNECT_STR, "t1")
-        self.assertEquals(len(producer.broker_partitions), 
-                          TOTAL_NUM_PARTITIONS,
-                          "We should be sending to all broker_partitions.")
-               
-        c1 = ZKConsumer(ZK_CONNECT_STR, "group1", "t1")
-        self.assertEquals(len(c1.broker_partitions), 
-                          TOTAL_NUM_PARTITIONS,
-                          "Only one consumer, it should have all partitions.")
-        c2 = ZKConsumer(ZK_CONNECT_STR, "group1", "t1")
-        self.assertEquals(len(c2.broker_partitions),
-                          (TOTAL_NUM_PARTITIONS) / 2)
-        c1.rebalance()
-        self.assertEquals(len(set(c1.broker_partitions + c2.broker_partitions)),
-                          TOTAL_NUM_PARTITIONS,
-                          "We should have all broker partitions covered.")
+    # Now give the Kafka instances a little time to spin up...
+    time.sleep(3)
+
+def setup_zookeeper():
+    # Create all the directories we need...
+    config_dir, data_dir = create_run_dirs("zookeeper/config", "zookeeper/data")
+    # Write this session's config file...
+    config_file = os.path.join(config_dir, "zookeeper.properties")
+    zk_config = ZKConfig(config_file, data_dir, ZK_PORT)
+    write_config("zookeeper.properties", config_file, zk_config)
+
+    return zk_config
+
+def setup_kafka(num_instances, num_partitions):
+    config_dir, data_dir = create_run_dirs("kafka/config", "kafka/data")
+
+    # Write this session's config file...
+    configs = []
+    for i in range(num_instances):
+        config_file = os.path.join(config_dir, 
+                                   "kafka.{0}.properties".format(i))
+        log_dir = os.path.join(data_dir, str(i))
+        os.makedirs(log_dir)
+        kafka_config = KafkaConfig(config_file=config_file,
+                                   broker_id=i,
+                                   port=KAFKA_BASE_PORT + i,
+                                   log_dir=log_dir,
+                                   num_partitions=num_partitions,
+                                   zk_server="localhost:{0}".format(ZK_PORT),
+                                   jmx_port=JMX_BASE_PORT + i)
+        configs.append(kafka_config)
+        write_config("kafka.properties", config_file, kafka_config)
+
+    return configs
+
+def tearDown():
+    # Have to kill Kafka before ZooKeeper, or Kafka will get very distraught
+    # You can't kill the processes with Popen.terminate() because what we
+    # call is just a shell script that spawns off a Java process. But since
+    # we did that bit with preexec_fn=os.setsid when we created them, we can
+    # kill the entire process group with os.killpg
+    if not run_exists():
+        return
+
+    for process in kafka_processes:
+        log.info("Terminating Kafka process {0}".format(process))
+        os.killpg(process.pid, signal.SIGTERM)
+
+    log.info("Terminating ZooKeeper process {0}".format(zk_process))
+    os.killpg(zk_process.pid, signal.SIGTERM)
+    time.sleep(3)
+    reset_run_vars()
+
+def write_config(template_name, finished_location, format_obj):
+    with open(template(template_name)) as template_file:
+        template_text = template_file.read()
+        config_text = template_text.format(format_obj)
+        with open(finished_location, "wb") as finished_file:
+            finished_file.write(config_text)
+
+def create_run_dirs(*dirs):
+    paths = [os.path.join(run_dir, d) for d in dirs]
+    for path in paths:
+        os.makedirs(path)
+    return paths
+
+def template(config):
+    """Return the template configuration file for a given config file."""
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    return os.path.join(script_dir, "server_config", config)
+
+def reset_run_vars():
+    global kafka_configs, kafka_processes, run_dir, zk_config, zk_process
+    kafka_configs = kafka_processes = run_dir = zk_config = zk_process = None
+
+def run_exists():
+    return any([kafka_configs, kafka_processes, run_dir, zk_config, zk_process])
+
+####
+
+def print_zk_snapshot():
+    # Dump all the ZooKeeper state at this point
+    zk = ZooKeeper(ZK_CONNECT_STR)
+    print zk.export_tree(ephemeral=True)
+
+################################ TESTS BEGIN ###################################
+
+def test_001_consumers_manual_rebalancing():
+    """Test that basic consumer rebalancing logic works..."""
+    for kafka_config in kafka_configs:
+       k = Kafka("localhost", kafka_config.port)
+       for topic in ["t1", "t2", "t3"]:
+          k.produce(topic, ["bootstrap"], 0)
+          time.sleep(1)
+
+    producer = ZKProducer(ZK_CONNECT_STR, "t1")
+    assert_equals(len(producer.broker_partitions), TOTAL_NUM_PARTITIONS,
+                  "We should be sending to all broker_partitions.")
+           
+    c1 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
+    assert_equals(len(c1.broker_partitions), TOTAL_NUM_PARTITIONS,
+                  "Only one consumer, it should have all partitions.")
+    c2 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
+    assert_equals(len(c2.broker_partitions), (TOTAL_NUM_PARTITIONS) / 2)
+
+    c1.rebalance()
+    assert_equals(len(set(c1.broker_partitions + c2.broker_partitions)),
+                  TOTAL_NUM_PARTITIONS,
+                  "We should have all broker partitions covered.")
+
+    c3 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
+    assert_equals(len(c3.broker_partitions), (TOTAL_NUM_PARTITIONS) / 3)
+    c1.rebalance()
+    c2.rebalance()
+    assert_equals(sum(len(c.broker_partitions) for c in [c1, c2, c3]),
+                  TOTAL_NUM_PARTITIONS,
+                  "All BrokerPartitions should be accounted for.")
+    assert_equals(len(set(c1.broker_partitions + c2.broker_partitions + 
+                          c3.broker_partitions)),
+                  TOTAL_NUM_PARTITIONS,
+                  "There should be no overlaps")
+
+def test_002_consumers():
+    c1 = ZKConsumer(ZK_CONNECT_STR, "group_002", "topic_002")
     
-        c3 = ZKConsumer(ZK_CONNECT_STR, "group1", "t1")
-        self.assertEquals(len(c3.broker_partitions),
-                          (TOTAL_NUM_PARTITIONS) / 3)
-        c1.rebalance()
-        c2.rebalance()
-        self.assertEquals(len(set(c1.broker_partitions + c2.broker_partitions + 
-                                  c3.broker_partitions)),
-                          TOTAL_NUM_PARTITIONS,
-                          "We should have all broker partitions covered with no overlap.")
+    result = c1.fetch()
+    assert_equals(len(result), 0, "This shouldn't error, but it should be empty")
 
-    def test_002_consumers(self):
-        c1 = ZKConsumer(ZK_CONNECT_STR, "group002", "topic002")
-        
-        result = c1.fetch()
-        self.assertEquals(len(result), 0, "This shouldn't error, but it should be empty")
+    for kafka_config in kafka_configs:
+        k = Kafka("localhost", kafka_config.port)
+        for partition in range(NUM_PARTITIONS):
+            k.produce("topic_002", ["hello"], partition)
+    time.sleep(2)
 
-        for kafka_config in self.kafka_configs:
-            k = Kafka("localhost", kafka_config.port)
-            for partition in range(NUM_PARTITIONS):
-                k.produce("topic002", ["hello"], partition)
-        time.sleep(2)
+    # This should grab "hello" from every partition and every topic
+    # c1.rebalance()
+    result = c1.fetch()
 
-        # This should grab "hello" from every partition and every topic
-        # c1.rebalance()
-        result = c1.fetch()
-        self.print_zk_snapshot()
+    assert_equals(len(set(result.broker_partitions)), TOTAL_NUM_PARTITIONS)
+    for msg_set in result:
+        assert_equals(msg_set.messages, ["hello"])
 
-        self.assertEquals(len(set(result.broker_partitions)),
-                          TOTAL_NUM_PARTITIONS)
-        for msg_set in result:
-            print unicode(msg_set)
-            self.assertEquals(msg_set.messages, ["hello"])
-        
-        # assert(False)
-
-    def print_zk_snapshot(self):
-        # Dump all the ZooKeeper state at this point
-        zk = ZooKeeper(ZK_CONNECT_STR)
-        print zk.export_tree(ephemeral=True)
-
-    def setUp(self):
-        timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%s_%f')
-        self.run_dir = os.path.join("/tmp", "brod_zk_test", timestamp)
-        os.makedirs(self.run_dir)
-        log.info("ZooKeeper and Kafka data in {0}".format(self.run_dir))
-
-        # Set up configuration and data directories for ZK and Kafka
-        self.zk_config = self.setup_zookeeper()
-        self.kafka_configs = self.setup_kafka(NUM_BROKERS, NUM_PARTITIONS)
-
-        # Start ZooKeeper...
-        log.info("Starting ZooKeeper with config {0}".format(self.zk_config))
-        self.zk_process = Popen(["kafka-run-class.sh",
-                                 "org.apache.zookeeper.server.quorum.QuorumPeerMain",
-                                 self.zk_config.config_file],
-                                stdout=open(self.run_dir + "/zookeeper.log", "wb"),
-                                stderr=open(self.run_dir + "/zookeeper_error.log", "wb"),
-                                shell=False,
-                                preexec_fn=os.setsid
-                          )
-        # Give ZK a little time to finish starting up before we start spawning
-        # Kafka instances to connect to it.
-        time.sleep(3)
-
-        # Start Kafka. We use kafka-run-class.sh instead of 
-        # kafka-server-start.sh because the latter sets the JMX_PORT to 9999
-        # and we want to set it differently for each Kafka instance
-        self.kafka_processes = []
-        for kafka_config in self.kafka_configs:
-            env = os.environ.copy()
-            env["JMX_PORT"] = str(kafka_config.jmx_port)
-            log.info("Starting Kafka with config {0}".format(kafka_config))
-            run_log = "kafka_{0}.log".format(kafka_config.broker_id)
-            run_errs = "kafka_error_{0}.log".format(kafka_config.broker_id)
-            process = Popen(["kafka-run-class.sh",
-                             "kafka.Kafka", 
-                             kafka_config.config_file],
-                             stdout=open("{0}/{1}".format(self.run_dir, run_log), "wb"),
-                             stderr=open("{0}/{1}".format(self.run_dir, run_errs), "wb"),
-                             shell=False,
-                             preexec_fn=os.setsid,
-                             env=env,
-                      )
-            self.kafka_processes.append(process)
-        
-        # Now give the Kafka instances a little time to spin up...
-        time.sleep(3)
-
-
-    def setup_zookeeper(self):
-        # Create all the directories we need...
-        config_dir, data_dir = self._create_run_dirs("zookeeper/config",
-                                                     "zookeeper/data")
-        # Write this session's config file...
-        config_file = os.path.join(config_dir, "zookeeper.properties")
-        zk_config = ZKConfig(config_file, data_dir, ZK_PORT)
-        self._write_config("zookeeper.properties", config_file, zk_config)
-
-        return zk_config
-
-    def setup_kafka(self, num_instances, num_partitions):
-        config_dir, data_dir = self._create_run_dirs("kafka/config", "kafka/data")
-
-        # Write this session's config file...
-        configs = []
-        for i in range(num_instances):
-            config_file = os.path.join(config_dir, 
-                                       "kafka.{0}.properties".format(i))
-            log_dir = os.path.join(data_dir, str(i))
-            os.makedirs(log_dir)
-            kafka_config = KafkaConfig(config_file=config_file,
-                                       broker_id=i,
-                                       port=KAFKA_BASE_PORT + i,
-                                       log_dir=log_dir,
-                                       num_partitions=num_partitions,
-                                       zk_server="localhost:{0}".format(ZK_PORT),
-                                       jmx_port=JMX_BASE_PORT + i)
-            configs.append(kafka_config)
-            self._write_config("kafka.properties", config_file, kafka_config)
-
-        return configs
-
-    def tearDown(self):
-        # Have to kill Kafka before ZooKeeper, or Kafka will get very distraught
-        # You can't kill the processes with Popen.terminate() because what we
-        # call is just a shell script that spawns off a Java process. But since
-        # we did that bit with preexec_fn=os.setsid when we created them, we can
-        # kill the entire process group with os.killpg
-        for process in self.kafka_processes:
-            log.info("Terminating Kafka process {0}".format(process))
-            os.killpg(process.pid, signal.SIGTERM)
-
-        log.info("Terminating ZooKeeper process {0}".format(self.zk_process))
-        os.killpg(self.zk_process.pid, signal.SIGTERM)
-        time.sleep(3) # Let it die with dignity
-
-    def _write_config(self, template_name, finished_location, format_obj):
-        with open(self._template(template_name)) as template_file:
-            template_text = template_file.read()
-            config_text = template_text.format(format_obj)
-            with open(finished_location, "wb") as finished_file:
-                finished_file.write(config_text)
-
-    def _create_run_dirs(self, *dirs):
-        paths = [os.path.join(self.run_dir, d) for d in dirs]
-        for path in paths:
-            os.makedirs(path)
-        return paths
-    
-    def _template(self, config):
-        """Return the template configuration file for a given config file."""
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        return os.path.join(script_dir, "server_config", config)
