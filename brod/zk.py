@@ -239,6 +239,13 @@ class ZKUtil(object):
                     print "Node %s: setting to %s" % (offset_node, next_offset)
                     offset_node.set(string_value=str(next_offset))
 
+    # def reset_consumer_group(self, consumer_group):
+    #    """WARNING: THIS SHOULD ONLY BE USED DURING DEV/DEBUGGING
+    #
+    #    This will reset the ZooKeeper state for the consumer_group in question.
+    #    It really just removes the node for all the offsets
+    #    """
+
     def path_for_broker_topic(self, broker_id, topic_name):
         return "{0}/{1}".format(self.path_for_topic(topic_name), broker_id)
 

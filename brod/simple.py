@@ -104,6 +104,9 @@ class SimpleConsumer(object):
                 yield msg_set
             time.sleep(poll_interval)
     
+    def end_at(self, bps_to_offsets):
+        """Don't consume beyond this point for the bps listed"""
+        pass
 
 # consumer = SimpleConsumer("topic", broker_list)
 
