@@ -205,7 +205,7 @@ def print_zk_snapshot():
 
 ################################ TESTS BEGIN ###################################
 def test_001_consumer_rebalancing():
-    """Consumer rebalancing, with manual rebalancing."""
+    """Consumer rebalancing, with auto rebalancing."""
     for kafka_config in kafka_configs:
        k = Kafka("localhost", kafka_config.port)
        for topic in ["t1", "t2", "t3"]:
@@ -240,43 +240,6 @@ def test_001_consumer_rebalancing():
                           c3.broker_partitions)),
                   TOTAL_NUM_PARTITIONS,
                   "There should be no overlaps")
-
-
-# def test_002_consumers_auto_rebalancing():
-#     """Consumer rebalancing, with automatic detection."""
-#     for kafka_config in kafka_configs:
-#        k = Kafka("localhost", kafka_config.port)
-#        for topic in ["t1", "t2", "t3"]:
-#           k.produce(topic, ["bootstrap"], 0)
-#           time.sleep(1)
-# 
-#     producer = ZKProducer(ZK_CONNECT_STR, "t1")
-#     assert_equals(len(producer.broker_partitions), TOTAL_NUM_PARTITIONS,
-#                   "We should be sending to all broker_partitions.")
-#            
-#     c1 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
-#     assert_equals(len(c1.broker_partitions), TOTAL_NUM_PARTITIONS,
-#                   "Only one consumer, it should have all partitions.")
-#     c2 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
-#     assert_equals(len(c2.broker_partitions), (TOTAL_NUM_PARTITIONS) / 2)
-# 
-#     time.sleep
-#     assert_equals(len(set(c1.broker_partitions + c2.broker_partitions)),
-#                   TOTAL_NUM_PARTITIONS,
-#                   "We should have all broker partitions covered.")
-# 
-#     c3 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
-#     assert_equals(len(c3.broker_partitions), (TOTAL_NUM_PARTITIONS) / 3)
-#     c1.rebalance()
-#     c2.rebalance()
-#     assert_equals(sum(len(c.broker_partitions) for c in [c1, c2, c3]),
-#                   TOTAL_NUM_PARTITIONS,
-#                   "All BrokerPartitions should be accounted for.")
-#     assert_equals(len(set(c1.broker_partitions + c2.broker_partitions + 
-#                           c3.broker_partitions)),
-#                   TOTAL_NUM_PARTITIONS,
-#                   "There should be no overlaps")
-
 
 def test_003_consumers():
     """Multi-broker/partition fetches"""
