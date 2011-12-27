@@ -96,7 +96,7 @@ def setup():
                         preexec_fn=os.setsid)
     # Give ZK a little time to finish starting up before we start spawning
     # Kafka instances to connect to it.
-    time.sleep(3)
+    time.sleep(2)
 
     # Start Kafka. We use kafka-run-class.sh instead of 
     # kafka-server-start.sh because the latter sets the JMX_PORT to 9999
@@ -119,7 +119,7 @@ def setup():
         kafka_processes.append(process)
     
     # Now give the Kafka instances a little time to spin up...
-    time.sleep(3)
+    time.sleep(2)
 
 def setup_zookeeper():
     # Create all the directories we need...
@@ -168,7 +168,7 @@ def tearDown():
 
     log.info("Terminating ZooKeeper process {0}".format(zk_process))
     os.killpg(zk_process.pid, signal.SIGTERM)
-    time.sleep(3)
+    time.sleep(1)
     reset_run_vars()
 
 def write_config(template_name, finished_location, format_obj):
@@ -204,9 +204,8 @@ def print_zk_snapshot():
     print zk.export_tree(ephemeral=True)
 
 ################################ TESTS BEGIN ###################################
-
-def test_001_consumers_manual_rebalancing():
-    """Test that basic consumer rebalancing logic works..."""
+def test_001_consumer_rebalancing():
+    """Consumer rebalancing, with manual rebalancing."""
     for kafka_config in kafka_configs:
        k = Kafka("localhost", kafka_config.port)
        for topic in ["t1", "t2", "t3"]:
@@ -223,15 +222,17 @@ def test_001_consumers_manual_rebalancing():
     c2 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
     assert_equals(len(c2.broker_partitions), (TOTAL_NUM_PARTITIONS) / 2)
 
-    c1.rebalance()
+    time.sleep(1)
     assert_equals(len(set(c1.broker_partitions + c2.broker_partitions)),
                   TOTAL_NUM_PARTITIONS,
                   "We should have all broker partitions covered.")
 
     c3 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
     assert_equals(len(c3.broker_partitions), (TOTAL_NUM_PARTITIONS) / 3)
-    c1.rebalance()
-    c2.rebalance()
+    # c1.rebalance()
+    # c2.rebalance()
+
+    time.sleep(1)
     assert_equals(sum(len(c.broker_partitions) for c in [c1, c2, c3]),
                   TOTAL_NUM_PARTITIONS,
                   "All BrokerPartitions should be accounted for.")
@@ -240,8 +241,46 @@ def test_001_consumers_manual_rebalancing():
                   TOTAL_NUM_PARTITIONS,
                   "There should be no overlaps")
 
-def test_002_consumers():
-    c1 = ZKConsumer(ZK_CONNECT_STR, "group_002", "topic_002")
+
+# def test_002_consumers_auto_rebalancing():
+#     """Consumer rebalancing, with automatic detection."""
+#     for kafka_config in kafka_configs:
+#        k = Kafka("localhost", kafka_config.port)
+#        for topic in ["t1", "t2", "t3"]:
+#           k.produce(topic, ["bootstrap"], 0)
+#           time.sleep(1)
+# 
+#     producer = ZKProducer(ZK_CONNECT_STR, "t1")
+#     assert_equals(len(producer.broker_partitions), TOTAL_NUM_PARTITIONS,
+#                   "We should be sending to all broker_partitions.")
+#            
+#     c1 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
+#     assert_equals(len(c1.broker_partitions), TOTAL_NUM_PARTITIONS,
+#                   "Only one consumer, it should have all partitions.")
+#     c2 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
+#     assert_equals(len(c2.broker_partitions), (TOTAL_NUM_PARTITIONS) / 2)
+# 
+#     time.sleep
+#     assert_equals(len(set(c1.broker_partitions + c2.broker_partitions)),
+#                   TOTAL_NUM_PARTITIONS,
+#                   "We should have all broker partitions covered.")
+# 
+#     c3 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
+#     assert_equals(len(c3.broker_partitions), (TOTAL_NUM_PARTITIONS) / 3)
+#     c1.rebalance()
+#     c2.rebalance()
+#     assert_equals(sum(len(c.broker_partitions) for c in [c1, c2, c3]),
+#                   TOTAL_NUM_PARTITIONS,
+#                   "All BrokerPartitions should be accounted for.")
+#     assert_equals(len(set(c1.broker_partitions + c2.broker_partitions + 
+#                           c3.broker_partitions)),
+#                   TOTAL_NUM_PARTITIONS,
+#                   "There should be no overlaps")
+
+
+def test_003_consumers():
+    """Multi-broker/partition fetches"""
+    c1 = ZKConsumer(ZK_CONNECT_STR, "group_003", "topic_003")
     
     result = c1.fetch()
     assert_equals(len(result), 0, "This shouldn't error, but it should be empty")
@@ -249,7 +288,7 @@ def test_002_consumers():
     for kafka_config in kafka_configs:
         k = Kafka("localhost", kafka_config.port)
         for partition in range(NUM_PARTITIONS):
-            k.produce("topic_002", ["hello"], partition)
+            k.produce("topic_003", ["hello"], partition)
     time.sleep(2)
 
     # This should grab "hello" from every partition and every topic
