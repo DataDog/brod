@@ -54,10 +54,18 @@ Finally: Try to use different consumer group names if at all possible, so that
 the tests with the same topology setup won't interfere with each other.
 
 TODO/FIXME:
-    We could save time at the expense of memory if we're willing to spin up all
-    the servers for our various configurations at once (or at least a decent 
-    group of them). But we'd have to refactor how we do the tracking, since 
-    right now all the run start/stop stuff is in static vars of RunConfig
+1. We could save time at the expense of memory if we're willing to spin up all
+   the servers for our various configurations at once (or at least a decent 
+   group of them). But we'd have to refactor how we do the tracking, since 
+   right now all the run start/stop stuff is in static vars of RunConfig
+
+2. There's a whole lot of noise in the logs that comes out when you shut down
+   a ZooKeeper instance and the underlying ZooKeeper library freaks out about
+   the lost connections for the various notification subscriptions it's made.
+   I tried forcing garbage collection and increasing the wait time after the
+   servers are torn down, but something in the ZooKeeper library isn't getting
+   deleted properly when things go out of scope. The upshot is that devs might
+   get lots of superflous ZooKeeper errors in their logs.
 """
 import logging
 import os
@@ -300,9 +308,10 @@ def test_001_consumer_rebalancing():
                   topology_001.total_partitions,
                   "There should be no overlaps")
 
+@with_setup(setup_servers(ServerTopology("002", 2, 10)))
 def test_001_consumers():
     """Multi-broker/partition fetches"""
-    c1 = ZKConsumer(ZK_CONNECT_STR, "group_002", "topic_002")
+    c1 = ZKConsumer(ZK_CONNECT_STR, "group_002_consumers", "topic_001_consumers")
     
     result = c1.fetch()
     assert_equals(len(result), 0, "This shouldn't error, but it should be empty")
@@ -310,7 +319,7 @@ def test_001_consumers():
     for kafka_config in RunConfig.kafka_configs:
         k = Kafka("localhost", kafka_config.port)
         for partition in range(topology_001.partitions_per_broker):
-            k.produce("topic_002", ["hello"], partition)
+            k.produce("topic_001_consumers", ["hello"], partition)
     time.sleep(2)
 
     # This should grab "hello" from every partition and every topic

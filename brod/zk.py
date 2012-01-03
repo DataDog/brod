@@ -217,7 +217,9 @@ class ZKUtil(object):
         return bps_to_offsets
 
     def save_offsets_for(self, consumer_group, bps_to_next_offsets):
-        log.debug("Saving offsets {0}".format(bps_to_next_offsets.values()))
+        bp_ids_to_offsets = sorted((bp.id, offset) 
+                                   for bp, offset in bps_to_next_offsets.items())
+        log.debug("Saving offsets {0}".format(bp_ids_to_offsets))
         for bp, next_offset in sorted(bps_to_next_offsets.items()):
             # The topic might not exist at all, in which case no broker has 
             # anything, so there's no point in making the offsets nodes and such
@@ -238,13 +240,6 @@ class ZKUtil(object):
                 if next_offset is not None:
                     print "Node %s: setting to %s" % (offset_node, next_offset)
                     offset_node.set(string_value=str(next_offset))
-
-    # def reset_consumer_group(self, consumer_group):
-    #    """WARNING: THIS SHOULD ONLY BE USED DURING DEV/DEBUGGING
-    #
-    #    This will reset the ZooKeeper state for the consumer_group in question.
-    #    It really just removes the node for all the offsets
-    #    """
 
     def path_for_broker_topic(self, broker_id, topic_name):
         return "{0}/{1}".format(self.path_for_topic(topic_name), broker_id)
@@ -631,8 +626,9 @@ class ZKConsumer(object):
                   .format(self._id, sorted(zk.watches.data.keys())))
 
     def __unicode__(self):
+        bp_ids = [bp.id for bp in self._broker_partitions]
         return ("ZKConsumer {0} attached to broker partitions {1}"
-                .format(self.id, self._broker_partitions))
+                .format(self.id, bp_ids))
 
     def __del__(self):
         self.close()

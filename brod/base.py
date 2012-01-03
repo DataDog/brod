@@ -78,7 +78,7 @@ class BrokerPartition(namedtuple('BrokerPartition',
                                  'broker_id partition creator host port topic')):
     @property
     def id(self):
-        return "{0.broker_id}-{1.partition}".format(self)
+        return "{0.broker_id}-{0.partition}".format(self)
 
     @classmethod
     def from_zk(cls, broker_id, broker_string, topic, num_parts):
