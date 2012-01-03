@@ -21,12 +21,43 @@ What you need to run the tests:
 Note that the test order matters. Bringing ZooKeeper and the Kafka brokers up
 takes a few seconds each time, so we try to avoid it when possible. The tests
 are run in the order that they appear in the module, and at any time, we can
-change the Kafka server topology by prefixing our test with:
+change the Kafka server topology by using nosetest's @with_setup decorator and
+passing it a ServerTopology object. By convention, the test functions are named
+after the topology that they're using. For example:
 
-@with_setup(setup_servers(num_brokers, partitions_per_broker))
-def test_005_something():
+topology_003 = ServerTopology("003", 3, 5) # 3 brokers, 5 partitions each
+
+@with_setup(setup_servers(topology_003)) 
+def test_003_something():
     ...
 
+def test_003_something_else():
+    ...
+
+topology_004 = ServerTopology("004", 1, 1) # 1 broker, 1 partition
+
+@with_setup(setup_servers(topology_004)) 
+def test_004_something():
+    ...
+
+def test_004_something_else():
+    ...
+
+If you have a test that you want to run with multiple topologies:
+
+1. Make the real test function a parameterized one that doesn't start or end
+   with "test" (so that nose doesn't automatically pick it up).
+2. Make a test in the appropriate server topology grouping that just calls the
+   real test with the appropriate arguments.
+
+Finally: Try to use different consumer group names if at all possible, so that
+the tests with the same topology setup won't interfere with each other.
+
+TODO/FIXME:
+    We could save time at the expense of memory if we're willing to spin up all
+    the servers for our various configurations at once (or at least a decent 
+    group of them). But we'd have to refactor how we do the tracking, since 
+    right now all the run start/stop stuff is in static vars of RunConfig
 """
 import logging
 import os
@@ -48,27 +79,37 @@ from zc.zk import ZooKeeper
 from brod import Kafka
 from brod.zk import ZKConsumer, ZKProducer
 
+class ServerTopology(namedtuple('ServerTopology',
+                                'name num_brokers partitions_per_broker')):
+    @property
+    def total_partitions(self):
+        return self.num_brokers * self.partitions_per_broker
+
 ZKConfig = namedtuple('ZKConfig', 'config_file data_dir client_port')
 KafkaConfig = namedtuple('KafkaConfig', 
                          'config_file broker_id port log_dir ' + \
                          'num_partitions zk_server jmx_port')
+
 KAFKA_BASE_PORT = 9101
 JMX_BASE_PORT = 10000
 ZK_PORT = 2182
 ZK_CONNECT_STR = "localhost:{0}".format(ZK_PORT)
 
-NUM_BROKERS = 3 # How many Kafka brokers we're going to spin up
-NUM_PARTITIONS = 5 # How many partitions per topic per broker
-TOTAL_NUM_PARTITIONS = NUM_BROKERS * NUM_PARTITIONS
-
 log = logging.getLogger("brod")
 
-######################### Module Level Vars for Runs ###########################
-# These get reset every time that teardown/setup() is run. If your test requires
-# a clean state, it should use the @with_setup() decorator. Otherwise, we leave
-# the instances up to make tests run faster.
 
 class RunConfig(object):
+    """This container class just has a bunch of class level vars that are 
+    manipulated by each setup_servers()/teardown() call. At any given point, it
+    has the configuration state used by the current run of ZooKeeper + Kafka.
+
+    Don't directly reset these values yourself. If you need a new configuration
+    for a set of tests, give your test the decorator:
+        group_001 = ServerTopology("001", 3, 5)
+        @with_setup(setup_servers(group_001))
+        def test_something():
+            # do stuff here
+    """
     kafka_configs = None
     kafka_processes = None
     run_dir = None
@@ -85,7 +126,7 @@ class RunConfig(object):
                     cls.zk_config, cls.zk_process])
 
 
-def setup_servers(num_brokers, partitions_per_broker):
+def setup_servers(topology):
     def run_setup():
         # For those tests that ask for new server instances -- kill the old one.
         if RunConfig.is_running():
@@ -94,13 +135,15 @@ def setup_servers(num_brokers, partitions_per_broker):
         timestamp = datetime.now().strftime('%Y-%m-%d-%H_%M_%s_%f')
         RunConfig.run_dir = os.path.join("/tmp", "brod_zk_test", timestamp)
         os.makedirs(RunConfig.run_dir)
-        log.info("SETUP: {0} brokers, {1} partitions per partition."
-                 .format(num_brokers, partitions_per_broker))
+        log.info("SETUP: Running with toplogy {0}".format(topology))
+        log.info(("SETUP: {0.num_brokers} brokers, {0.partitions_per_broker} " +
+                  "partitions per broker.").format(topology))
         log.info("SETUP: ZooKeeper and Kafka data in {0}".format(RunConfig.run_dir))
 
         # Set up configuration and data directories for ZK and Kafka
         RunConfig.zk_config = setup_zookeeper()
-        RunConfig.kafka_configs = setup_kafka(num_brokers, partitions_per_broker)
+        RunConfig.kafka_configs = setup_kafka(topology.num_brokers, 
+                                              topology.partitions_per_broker)
 
         # Start ZooKeeper...
         log.info("SETUP: Starting ZooKeeper with config {0}"
@@ -219,7 +262,9 @@ def print_zk_snapshot():
 
 ################################ TESTS BEGIN ###################################
 
-@with_setup(setup_servers(NUM_BROKERS, NUM_PARTITIONS))
+topology_001 = ServerTopology("001", 3, 5) # 3 brokers, 5 partitions each
+
+@with_setup(setup_servers(topology_001)) 
 def test_001_consumer_rebalancing():
     """Consumer rebalancing, with auto rebalancing."""
     for kafka_config in RunConfig.kafka_configs:
@@ -229,33 +274,33 @@ def test_001_consumer_rebalancing():
           time.sleep(1)
 
     producer = ZKProducer(ZK_CONNECT_STR, "t1")
-    assert_equals(len(producer.broker_partitions), TOTAL_NUM_PARTITIONS,
+    assert_equals(len(producer.broker_partitions), topology_001.total_partitions,
                   "We should be sending to all broker_partitions.")
            
     c1 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
-    assert_equals(len(c1.broker_partitions), TOTAL_NUM_PARTITIONS,
+    assert_equals(len(c1.broker_partitions), topology_001.total_partitions,
                   "Only one consumer, it should have all partitions.")
     c2 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
-    assert_equals(len(c2.broker_partitions), (TOTAL_NUM_PARTITIONS) / 2)
+    assert_equals(len(c2.broker_partitions), (topology_001.total_partitions) / 2)
 
     time.sleep(1)
     assert_equals(len(set(c1.broker_partitions + c2.broker_partitions)),
-                  TOTAL_NUM_PARTITIONS,
+                  topology_001.total_partitions,
                   "We should have all broker partitions covered.")
 
     c3 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
-    assert_equals(len(c3.broker_partitions), (TOTAL_NUM_PARTITIONS) / 3)
+    assert_equals(len(c3.broker_partitions), (topology_001.total_partitions) / 3)
 
     time.sleep(1)
     assert_equals(sum(len(c.broker_partitions) for c in [c1, c2, c3]),
-                  TOTAL_NUM_PARTITIONS,
+                  topology_001.total_partitions,
                   "All BrokerPartitions should be accounted for.")
     assert_equals(len(set(c1.broker_partitions + c2.broker_partitions + 
                           c3.broker_partitions)),
-                  TOTAL_NUM_PARTITIONS,
+                  topology_001.total_partitions,
                   "There should be no overlaps")
 
-def test_002_consumers():
+def test_001_consumers():
     """Multi-broker/partition fetches"""
     c1 = ZKConsumer(ZK_CONNECT_STR, "group_002", "topic_002")
     
@@ -264,7 +309,7 @@ def test_002_consumers():
 
     for kafka_config in RunConfig.kafka_configs:
         k = Kafka("localhost", kafka_config.port)
-        for partition in range(NUM_PARTITIONS):
+        for partition in range(topology_001.partitions_per_broker):
             k.produce("topic_002", ["hello"], partition)
     time.sleep(2)
 
@@ -272,7 +317,7 @@ def test_002_consumers():
     # c1.rebalance()
     result = c1.fetch()
 
-    assert_equals(len(set(result.broker_partitions)), TOTAL_NUM_PARTITIONS)
+    assert_equals(len(set(result.broker_partitions)), topology_001.total_partitions)
     for msg_set in result:
         assert_equals(msg_set.messages, ["hello"])
 

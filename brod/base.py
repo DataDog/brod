@@ -499,7 +499,7 @@ class BaseKafka(object):
         )
         request_size = len(data)
         bin_format = '<<uint:4, uint:2, uint:2, str:{0}, uint:4, uint:4, str:{1}>>'.format(len(topic), len(message_set))
-        kafka_log.info('produce request: {0} in format {1} ({2} bytes)'.format(request, bin_format, request_size))
+        kafka_log.debug('produce request: {0} in format {1} ({2} bytes)'.format(request, bin_format, request_size))
         return struct.pack('>I{0}s'.format(request_size), request_size, data)
     
     def _fetch_request(self, topic, offset, partition, max_size):
