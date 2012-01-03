@@ -308,7 +308,6 @@ def test_001_consumer_rebalancing():
                   topology_001.total_partitions,
                   "There should be no overlaps")
 
-@with_setup(setup_servers(ServerTopology("002", 2, 10)))
 def test_001_consumers():
     """Multi-broker/partition fetches"""
     c1 = ZKConsumer(ZK_CONNECT_STR, "group_002_consumers", "topic_001_consumers")
