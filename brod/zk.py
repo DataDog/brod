@@ -357,6 +357,7 @@ class ZKConsumer(object):
         self._needs_rebalance = True
         self._broker_partitions = [] # Updated during rebalancing
         self._bps_to_next_offsets = None # Updated after a successful fetch
+        self._rebalance_enabled = True # Only used for debugging purposes
 
         # These are to handle ZooKeeper notification subscriptions.
         self._topic_watch = None
@@ -545,6 +546,10 @@ class ZKConsumer(object):
         log.info(("Rebalance triggered for Consumer {0}, broker partitions " + \
                   "before rebalance: {1}").format(self.id, self._broker_partitions))
 
+        if not self._rebalance_enabled:
+            log.info("Rebalancing disabled -- ignoring rebalance request")
+            return 
+
         # Get all the consumer_ids in our consumer_group who are listening to 
         # this topic (this includes us).
         all_topic_consumers = self._zk_util.consumer_ids_for(self.topic, 
@@ -587,6 +592,25 @@ class ZKConsumer(object):
         # Report our progress
         log.info("Rebalance finished for Consumer {0}: {1}".format(self.id, unicode(self)))
 
+    def disable_rebalance(self):
+        """For debugging purposes -- disable rebalancing so that we can more 
+        easily test things like trying to request from a Kafka broker
+        that's down. Normally, the rebalancing means that we should only 
+        encounter these situations in race conditions.
+
+        I cannot think of any reason you would want to do this in actual code.
+        """
+        self._rebalance_enabled = False
+
+    def enable_rebalance(self):
+        """For debugging purposes -- re-enable rebalancing so that we can more 
+        easily test things like trying to request from a Kafka broker
+        that's down. Normally, the rebalancing means that we should only 
+        encounter these situations in race conditions.
+
+        I cannot think of any reason you would want to do this in actual code.
+        """
+        self._rebalance_enabled = True
 
     def _unbalance(self, nodes):
         """We use this so that rebalancing can happen at specific points (like

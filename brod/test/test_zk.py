@@ -243,6 +243,9 @@ def teardown():
     time.sleep(1)
     RunConfig.clear()
 
+def terminate_process(process):
+    os.killpg(process.pid, signal.SIGTERM)
+
 def write_config(template_name, finished_location, format_obj):
     with open(template(template_name)) as template_file:
         template_text = template_file.read()
@@ -328,4 +331,11 @@ def test_001_consumers():
     assert_equals(len(set(result.broker_partitions)), topology_001.total_partitions)
     for msg_set in result:
         assert_equals(msg_set.messages, ["hello"])
+
+def test_001_broker_failure_no_rebalancing():
+    """Test recovery from failed brokers"""
+
+
+
+
 
