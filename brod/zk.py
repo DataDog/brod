@@ -1,7 +1,6 @@
 """
 TODO:
 * Move producer, consumer into their own files
-* MessageSet and FetchResult need to go deeper into the stack in base
 * ZKUtil should be broken up into two pieces -- one with path info, the rest 
   to get folded into consumer and producer as necessary.
 """
