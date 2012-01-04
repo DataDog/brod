@@ -3,6 +3,9 @@ TODO:
 * Move producer, consumer into their own files
 * ZKUtil should be broken up into two pieces -- one with path info, the rest 
   to get folded into consumer and producer as necessary.
+
+FIXME: Extract the logic for testing how the brokers get partitioned so we can
+       test them in simple unit tests without involving Kafka/ZK.
 """
 import json
 import logging
@@ -15,7 +18,7 @@ from itertools import chain
 import zookeeper
 from zc.zk import ZooKeeper, FailedConnect
 
-from brod.base import BrokerPartition, ConsumerStats, FetchResult, KafkaError, MessageSet
+from brod.base import BrokerPartition, ConsumerStats, FetchResult, KafkaError, MessageSet, OffsetOutOfRange
 from brod.blocking import Kafka
 
 log = logging.getLogger('brod.zk')
@@ -103,7 +106,54 @@ class ZKUtil(object):
         
         return state
 
+    def offsets_for(self, consumer_group, consumer_id, broker_partitions):
+        """Return a dictionary mapping broker_partitions to offsets."""
+        UNKNOWN_OFFSET = 2**63 - 1 # Long.MAX_VALUE, it's what Kafka's client does
+        bps_to_offsets = {}
+        for bp in broker_partitions:
+            # The topic might not exist at all, in which case no broker has 
+            # anything, so there's no point in making the offsets nodes and such
+            if self._zk.exists(self.path_for_topic(bp.topic)):
+                offset_path = self.path_for_offset(consumer_group, 
+                                                   bp.topic, 
+                                                   bp.broker_id,
+                                                   bp.partition)
+                try:
+                    offset = int(self._zk_properties(offset_path))
+                except zookeeper.NoNodeException as ex:
+                    # This is counter to the Kafka client behavior, put here for
+                    # simplicity for now. FIXME: Dave
+                    self._create_path_if_needed(offset_path, 0)
+                    offset = 0
+                bps_to_offsets[bp] = offset
+        
+        return bps_to_offsets
 
+    def save_offsets_for(self, consumer_group, bps_to_next_offsets):
+        bp_ids_to_offsets = sorted((bp.id, offset) 
+                                   for bp, offset in bps_to_next_offsets.items())
+        log.debug("Saving offsets {0}".format(bp_ids_to_offsets))
+        for bp, next_offset in sorted(bps_to_next_offsets.items()):
+            # The topic might not exist at all, in which case no broker has 
+            # anything, so there's no point in making the offsets nodes and such
+            if self._zk.exists(self.path_for_topic(bp.topic)):
+                offset_path = self.path_for_offset(consumer_group, 
+                                                   bp.topic, 
+                                                   bp.broker_id,
+                                                   bp.partition)
+                try:
+                    offset_node = self._zk.properties(offset_path)
+                except zookeeper.NoNodeException as ex:
+                    self._create_path_if_needed(offset_path, bps)
+                    offset_node = self._zk.properties(offset_path)
+                    next_offset = 0 # If we're creating the node now, assume we
+                                    # need to start at 0.                
+                # None is the default value when we don't know what the next
+                # offset is, possibly because the MessageSet is empty...
+                if next_offset is not None:
+                    print "Node %s: setting to %s" % (offset_node, next_offset)
+                    offset_node.set(string_value=str(next_offset))
+ 
     def broker_ids_for(self, topic):
         topic_path = self.path_for_topic(topic)
         try:
@@ -189,56 +239,6 @@ class ZKUtil(object):
                     init_data = json.dumps(data)
                 zookeeper.create(self._zk.handle, node_to_create, init_data, ZKUtil.ACL)
             created_so_far.append(node)
-
-    def offsets_for(self, consumer_group, consumer_id, broker_partitions):
-        """Return a dictionary mapping broker_partitions to offsets."""
-        UNKNOWN_OFFSET = 2**63 - 1 # Long.MAX_VALUE, it's what Kafka's client does
-        bps_to_offsets = {}
-
-        for bp in broker_partitions:
-            # The topic might not exist at all, in which case no broker has 
-            # anything, so there's no point in making the offsets nodes and such
-            if self._zk.exists(self.path_for_topic(bp.topic)):
-                offset_path = self.path_for_offset(consumer_group, 
-                                                   bp.topic, 
-                                                   bp.broker_id,
-                                                   bp.partition)
-                try:
-                    offset = int(self._zk_properties(offset_path))
-                except zookeeper.NoNodeException as ex:
-                    # This is counter to the Kafka client behavior, put here for
-                    # simplicity for now. FIXME: Dave
-                    self._create_path_if_needed(offset_path, 0)
-                    offset = 0
-
-                bps_to_offsets[bp] = offset
-        
-        return bps_to_offsets
-
-    def save_offsets_for(self, consumer_group, bps_to_next_offsets):
-        bp_ids_to_offsets = sorted((bp.id, offset) 
-                                   for bp, offset in bps_to_next_offsets.items())
-        log.debug("Saving offsets {0}".format(bp_ids_to_offsets))
-        for bp, next_offset in sorted(bps_to_next_offsets.items()):
-            # The topic might not exist at all, in which case no broker has 
-            # anything, so there's no point in making the offsets nodes and such
-            if self._zk.exists(self.path_for_topic(bp.topic)):
-                offset_path = self.path_for_offset(consumer_group, 
-                                                   bp.topic, 
-                                                   bp.broker_id,
-                                                   bp.partition)
-                try:
-                    offset_node = self._zk.properties(offset_path)
-                except zookeeper.NoNodeException as ex:
-                    self._create_path_if_needed(offset_path, bps)
-                    offset_node = self._zk.properties(offset_path)
-                    next_offset = 0 # If we're creating the node now, assume we
-                                    # need to start at 0.                
-                # None is the default value when we don't know what the next
-                # offset is, possibly because the MessageSet is empty...
-                if next_offset is not None:
-                    print "Node %s: setting to %s" % (offset_node, next_offset)
-                    offset_node.set(string_value=str(next_offset))
 
     def path_for_broker_topic(self, broker_id, topic_name):
         return "{0}/{1}".format(self.path_for_topic(topic_name), broker_id)
@@ -437,13 +437,23 @@ class ZKConsumer(object):
         if self._needs_rebalance:
             self.rebalance()
 
-        # Find where we're starting from -- either from our last fetch, or from
-        # ZooKeeper.
-        bps_to_offsets = self._bps_to_next_offsets or \
-                         self._zk_util.offsets_for(self.consumer_group,
-                                                   self._id,
-                                                   self.broker_partitions)
-        
+        # Find where we're starting from...
+        offsets_pulled_from_zk = False
+        if self._bps_to_next_offsets:
+            # We've already done a fetch, we use our internal value. This is
+            # also all we can do in the case where autocommit is off, since any
+            # value in ZK will be out of date
+            bps_to_offsets = self._bps_to_next_offsets
+        else:
+            # In this case, it's our first fetch, and we need to ask ZooKeeper
+            # for our start value. That being said, if the value from ZooKeeper
+            # is out of range for any given partition, we'll simply start at the
+            # most recent value for that partition.
+            bps_to_offsets = self._zk_util.offsets_for(self.consumer_group,
+                                                       self._id,
+                                                       self.broker_partitions)
+            offsets_pulled_from_zk = True
+
         # Do all the fetches we need to (this should get replaced with 
         # multifetch or performance is going to suck wind later)...
         message_sets = []
@@ -451,15 +461,33 @@ class ZKConsumer(object):
         for bp in bps_to_offsets:
             offset = bps_to_offsets[bp]
             kafka = self._connections[bp.broker_id]
+            partition = kafka.partition(bp.topic, bp.partition)
 
             if offset is None:
-                partition = kafka.partition(bp.topic, bp.partition)
                 offset = partition.latest_offset()
+            
+            try:
+                offsets_msgs = kafka.fetch(bp.topic, 
+                                           offset,
+                                           partition=bp.partition,
+                                           max_size=max_size)
 
-            offsets_msgs = kafka.fetch(bp.topic, 
-                                       offset,
-                                       partition=bp.partition,
-                                       max_size=max_size)
+            # If our fetch fails because it's out of range, and the values came
+            # from ZK originally (not our internal incrementing), we assume ZK
+            # is somehow stale, so we just grab the latest and march on.
+            except OffsetOutOfRange as ex:
+                if offsets_pulled_from_zk:
+                    log.error("Offset {0} from ZooKeeper is out of range for {1}"
+                              .format(offset, bp))
+                    offset = partition.latest_offset()
+                    log.error("Retrying with offset {0} for {1}"
+                              .format(offset, bp))
+                    offsets_msgs = kafka.fetch(bp.topic, 
+                                               offset,
+                                               partition=bp.partition,
+                                               max_size=max_size)
+                else:
+                    raise
             message_sets.append(MessageSet(bp, offset, offsets_msgs))
         
         result = FetchResult(sorted(message_sets))
@@ -543,7 +571,7 @@ class ZKConsumer(object):
         was triggered.
         """
         log.info(("Rebalance triggered for Consumer {0}, broker partitions " + \
-                  "before rebalance: {1}").format(self.id, self._broker_partitions))
+                  "before rebalance: {1}").format(self.id, unicode(self)))
 
         if not self._rebalance_enabled:
             log.info("Rebalancing disabled -- ignoring rebalance request")
@@ -569,10 +597,17 @@ class ZKConsumer(object):
         # If the current consumer is among those that have an extra partition...
         num_parts = bp_per_consumer + (1 if my_index in consumers_with_extra else 0)
 
-        # If the previous consumer was among the those that have an extra 
-        # partition, add my_index to account for the extra partitions
-        start = my_index * bp_per_consumer + \
-                (my_index if my_index - 1 in consumers_with_extra else 0)
+        # We're the first index,
+        if my_index == 0:
+            start = 0
+        # All the indexes before us where ones with extra consumers
+        elif my_index - 1 in consumers_with_extra:
+            start = my_index * (bp_per_consumer + 1)
+        # There is 0 or more consumers with extra partitions followed by 
+        # 1 or more partitions with no extra partitions
+        else:
+            start = (len(consumers_with_extra) * (bp_per_consumer + 1)) + \
+                    ((my_index - len(consumers_with_extra)) * bp_per_consumer)
 
         ############## Set our state info... ##############
         self._broker_partitions = all_broker_partitions[start:start+num_parts]
@@ -655,30 +690,4 @@ class ZKConsumer(object):
 
     def __del__(self):
         self.close()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

@@ -313,7 +313,7 @@ def test_001_consumer_rebalancing():
 
 def test_001_consumers():
     """Multi-broker/partition fetches"""
-    c1 = ZKConsumer(ZK_CONNECT_STR, "group_002_consumers", "topic_001_consumers")
+    c1 = ZKConsumer(ZK_CONNECT_STR, "group_001_consumers", "topic_001_consumers")
     
     result = c1.fetch()
     assert_equals(len(result), 0, "This shouldn't error, but it should be empty")
@@ -332,8 +332,60 @@ def test_001_consumers():
     for msg_set in result:
         assert_equals(msg_set.messages, ["hello"])
 
-def test_001_broker_failure_no_rebalancing():
-    """Test recovery from failed brokers"""
+def test_001_zookeeper_invalid_offset():
+    """Test recovery from bad ZK offset value
+
+    If ZooKeeper stored an invalid start offset, we should print an ERROR
+    and start from the latest."""
+    # p = ZKProducer(ZK_CONNECT_STR, "topic_001_zookeeper_invalid_offset")
+    c1 = ZKConsumer(ZK_CONNECT_STR, 
+                    "group_001_zookeeper_invalid_offset", 
+                    "topic_001_zookeeper_invalid_offset",
+                    autocommit=True)
+    
+    # First we seed each partition with something...
+    #for i in range(topology_001.total_partitions):
+    #    p.send(["hello"], i)
+    for kafka_config in RunConfig.kafka_configs:
+        k = Kafka("localhost", kafka_config.port)
+        for partition in range(topology_001.partitions_per_broker):
+            k.produce("topic_001_zookeeper_invalid_offset", ["hello"], partition)
+
+    time.sleep(1)
+
+    # The following fetch will also save the ZK offset (autocommit=True)
+    result = c1.fetch()
+
+    # Now let's reach into ZooKeeper and manually set the offset to something 
+    # out of range.
+    z1 = c1._zk_util
+    bps_to_fake_offsets = dict((bp, 1000) for bp in c1.broker_partitions)
+    z1.save_offsets_for(c1.consumer_group, bps_to_fake_offsets)
+    c1.close()
+    time.sleep(1)
+
+    # Now delete c1, and create c2, which will take over all of it's partitions
+    c2 = ZKConsumer(ZK_CONNECT_STR, 
+                    "group_001_zookeeper_invalid_offset", 
+                    "topic_001_zookeeper_invalid_offset",
+                    autocommit=True)
+    # This should detect that the values in ZK are bad, and put us at the real
+    # end offset.
+    c2.fetch()
+               
+    # for i in range(topology_001.total_partitions):
+    #    p.send(["world"], i)
+    for kafka_config in RunConfig.kafka_configs:
+        k = Kafka("localhost", kafka_config.port)
+        for partition in range(topology_001.partitions_per_broker):
+            k.produce("topic_001_zookeeper_invalid_offset", ["world"], partition)
+    time.sleep(1)
+
+    result = c2.fetch()
+    for msg_set in result:
+        assert_equals(msg_set.messages, ["world"])
+    
+
 
 
 
