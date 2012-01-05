@@ -413,7 +413,7 @@ def test_001_zookeeper_invalid_offset():
     
 def test_001_reconnects():
     """Test that we keep trying to read, even if our brokers go down."""
-
+    1/0
 
 
 
