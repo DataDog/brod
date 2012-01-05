@@ -115,6 +115,9 @@ class KafkaServer(object):
         self.process = None
 
     def start(self):
+        if self.process:
+            return
+
         env = os.environ.copy()
         env["JMX_PORT"] = str(self.kafka_config.jmx_port)
         log.info("SETUP: Starting Kafka with config {0}".format(self.kafka_config))
@@ -400,7 +403,10 @@ def test_3x5_zookeeper_invalid_offset():
     assert result
     for msg_set in result:
         assert_equals(msg_set.messages, ["world"])
-    
+
+# Make sure that even if the test fails, the instance we brought down starts
+# back up.
+@with_setup(teardown=lambda: RunConfig.kafka_servers[0].start())
 def test_3x5_reconnects():
     """Test that we keep trying to read, even if our brokers go down.
 
@@ -469,6 +475,8 @@ def test_3x5_reconnects():
     assert_equal(topology_3x5.partitions_per_broker,
                  len([msg_set for msg_set in result
                       if msg_set.messages == ["Jack"]]))
+    
+
 
 
 
