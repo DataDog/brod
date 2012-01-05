@@ -356,7 +356,7 @@ class ZKConsumer(object):
         self._zk_util = ZKUtil(zk_conn) 
         self._needs_rebalance = True
         self._broker_partitions = [] # Updated during rebalancing
-        self._bps_to_next_offsets = None # Updated after a successful fetch
+        self._bps_to_next_offsets = {} # Updated after a successful fetch
         self._rebalance_enabled = True # Only used for debugging purposes
 
         # These are to handle ZooKeeper notification subscriptions.
@@ -425,7 +425,8 @@ class ZKConsumer(object):
 
     def fetch(self, max_size=None, retry_limit=3, ignore_failures=False):
         """Return a FetchResult, which can be iterated over as a list of 
-        MessageSets.
+        MessageSets. A MessageSet is returned for every broker partition that
+        is successfully queried, even if that MessageSet is empty.
 
         FIXME: This is where the adjustment needs to happen. Regardless of 
         whether a rebalance has occurred or not, we can very easily see if we
@@ -502,8 +503,9 @@ class ZKConsumer(object):
         result = FetchResult(sorted(message_sets))
 
         # Now persist our new offsets
-        self._bps_to_next_offsets = dict((msg_set.broker_partition, msg_set.next_offset)
-                                         for msg_set in result)
+        for msg_set in result:
+            self._bps_to_next_offsets[msg_set.broker_partition] = msg_set.next_offset
+
         if self._autocommit:
             self.commit_offsets()
 

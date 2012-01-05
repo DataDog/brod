@@ -429,35 +429,46 @@ def test_3x5_reconnects():
     for msg_set in result:
         assert_equal(msg_set.messages, ["Rusty"])
 
+    # Now send another round of messages to our broker partitions
+    send_to_all_partitions("topic_3x5_reconnects", ["Jack"])
+    time.sleep(2)
+
     # Disable rebalancing to force the consumer to read from the broker we're 
-    # going to kill
+    # going to kill, and then kill it.
     c1.disable_rebalance()
     fail_server = RunConfig.kafka_servers[0]
     fail_server.stop()
-    time.sleep(1.5)
-
-    # Now send messages to the non-dead brokers
-    for kafka_server in RunConfig.kafka_servers[1:]:
-        k = Kafka("localhost", kafka_server.kafka_config.port)
-        for partition in range(topology_3x5.partitions_per_broker):
-            k.produce("topic_3x5_reconnects", ["Jack"], partition)
+    time.sleep(2)
 
     # A straight fetch will give us a connection failure because it couldn't
     # reach the first broker. It won't increment any of the other partitions --
     # the whole thing should fail without any side effect.
     assert_raises(ConnectionFailure, c1.fetch)
 
-    # But a fetch told to ignore failures will return the results from the other
-    # brokers.
+    # But a fetch told to ignore failures will return the results from the 
+    # brokers that are still up
     result = c1.fetch(ignore_failures=True)
     assert_equal(topology_3x5.total_partitions - topology_3x5.partitions_per_broker,
                  len(result))
+    for msg_set in result:
+        assert_equal(msg_set.messages, ["Jack"])
 
-    # print [msg_set.messages for msg_set in result]
+    # Now we restart the failed Kafka broker, and do another fetch...
+    fail_server.start()
+    time.sleep(2)
 
-    #for msg_set in result:
-    #    assert_equal(msg_set.messages, ["Jack"])
-
+    result = c1.fetch()
+    # This should have MessageSets from all brokers (they're all reachable)
+    assert_equal(topology_3x5.total_partitions, len(result))
+    # But the only MessageSets that have messages in them should be from our
+    # fail_server (the others were already read in a previous fetch, so will be
+    # empty on this fetch).
+    assert_equal(topology_3x5.total_partitions - topology_3x5.partitions_per_broker,
+                 len([msg_set for msg_set in result if not msg_set]))
+    # The messages from our resurrected fail_server will be "Jack"s
+    assert_equal(topology_3x5.partitions_per_broker,
+                 len([msg_set for msg_set in result
+                      if msg_set.messages == ["Jack"]]))
 
 
 
