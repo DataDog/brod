@@ -423,7 +423,7 @@ class ZKConsumer(object):
         
         return SimpleConsumer(self.topic, broker_partitions)
 
-    def fetch(self, max_size=None, retry_limit=3):
+    def fetch(self, max_size=None, retry_limit=3, ignore_failures=False):
         """Return a FetchResult, which can be iterated over as a list of 
         MessageSets.
 
@@ -489,6 +489,14 @@ class ZKConsumer(object):
                                                max_size=max_size)
                 else:
                     raise
+            except KafkaError as k_err:
+                if ignore_failures:
+                    log.error("Ignoring failed fetch on {0}".format(bp))
+                    log.exception(k_err)
+                    continue
+                else:
+                    raise
+
             message_sets.append(MessageSet(bp, offset, offsets_msgs))
         
         result = FetchResult(sorted(message_sets))

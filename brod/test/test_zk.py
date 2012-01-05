@@ -166,8 +166,8 @@ class RunConfig(object):
 
     Don't directly reset these values yourself. If you need a new configuration
     for a set of tests, give your test the decorator:
-        group_001 = ServerTopology("001", 3, 5)
-        @with_setup(setup_servers(group_001))
+        group_3x5 = ServerTopology("001", 3, 5)
+        @with_setup(setup_servers(group_3x5))
         def test_something():
             # do stuff here
     """
@@ -277,7 +277,7 @@ def template(config):
     script_dir = os.path.dirname(os.path.realpath(__file__))
     return os.path.join(script_dir, "server_config", config)
 
-####
+####################### Util methods to use during tests #######################
 
 def print_zk_snapshot():
     # Dump all the ZooKeeper state at this point
@@ -292,14 +292,20 @@ def log_break(method_name):
              .format(method_name))
     log.info("")
 
+def send_to_all_partitions(topic, messages):
+    for kafka_server in RunConfig.kafka_servers:
+        k = Kafka("localhost", kafka_server.kafka_config.port)
+        for partition in range(topology_3x5.partitions_per_broker):
+            k.produce(topic, messages, partition)
+
 ################################ TESTS BEGIN ###################################
 
-topology_001 = ServerTopology("001", 3, 5) # 3 brokers, 5 partitions each
+topology_3x5 = ServerTopology("3x5", 3, 5) # 3 brokers, 5 partitions each
 
-@with_setup(setup_servers(topology_001)) 
-def test_001_consumer_rebalancing():
+@with_setup(setup_servers(topology_3x5)) 
+def test_3x5_consumer_rebalancing():
     """Consumer rebalancing, with auto rebalancing."""
-    log_break("test_001_consumer_rebalancing")
+    log_break("test_3x5_consumer_rebalancing")
     for kafka_server in RunConfig.kafka_servers:
         k = Kafka("localhost", kafka_server.kafka_config.port)
         for topic in ["t1", "t2", "t3"]:
@@ -307,75 +313,64 @@ def test_001_consumer_rebalancing():
             time.sleep(1)
 
     producer = ZKProducer(ZK_CONNECT_STR, "t1")
-    assert_equals(len(producer.broker_partitions), topology_001.total_partitions,
+    assert_equals(len(producer.broker_partitions), topology_3x5.total_partitions,
                   "We should be sending to all broker_partitions.")
            
-    c1 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
-    assert_equals(len(c1.broker_partitions), topology_001.total_partitions,
+    c1 = ZKConsumer(ZK_CONNECT_STR, "group_3x5", "t1")
+    assert_equals(len(c1.broker_partitions), topology_3x5.total_partitions,
                   "Only one consumer, it should have all partitions.")
-    c2 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
-    assert_equals(len(c2.broker_partitions), (topology_001.total_partitions) / 2)
+    c2 = ZKConsumer(ZK_CONNECT_STR, "group_3x5", "t1")
+    assert_equals(len(c2.broker_partitions), (topology_3x5.total_partitions) / 2)
 
     time.sleep(1)
     assert_equals(len(set(c1.broker_partitions + c2.broker_partitions)),
-                  topology_001.total_partitions,
+                  topology_3x5.total_partitions,
                   "We should have all broker partitions covered.")
 
-    c3 = ZKConsumer(ZK_CONNECT_STR, "group_001", "t1")
-    assert_equals(len(c3.broker_partitions), (topology_001.total_partitions) / 3)
+    c3 = ZKConsumer(ZK_CONNECT_STR, "group_3x5", "t1")
+    assert_equals(len(c3.broker_partitions), (topology_3x5.total_partitions) / 3)
 
     time.sleep(1)
     assert_equals(sum(len(c.broker_partitions) for c in [c1, c2, c3]),
-                  topology_001.total_partitions,
+                  topology_3x5.total_partitions,
                   "All BrokerPartitions should be accounted for.")
     assert_equals(len(set(c1.broker_partitions + c2.broker_partitions + 
                           c3.broker_partitions)),
-                  topology_001.total_partitions,
+                  topology_3x5.total_partitions,
                   "There should be no overlaps")
 
-def test_001_consumers():
+def test_3x5_consumers():
     """Multi-broker/partition fetches"""
-    log_break("test_001_consumers")
-    c1 = ZKConsumer(ZK_CONNECT_STR, "group_001_consumers", "topic_001_consumers")
+    log_break("test_3x5_consumers")
+    c1 = ZKConsumer(ZK_CONNECT_STR, "group_3x5_consumers", "topic_3x5_consumers")
     
     result = c1.fetch()
     assert_equals(len(result), 0, "This shouldn't error, but it should be empty")
 
-    for kafka_server in RunConfig.kafka_servers:
-        k = Kafka("localhost", kafka_server.kafka_config.port)
-        for partition in range(topology_001.partitions_per_broker):
-            k.produce("topic_001_consumers", ["hello"], partition)
-    time.sleep(2)
+    send_to_all_partitions("topic_3x5_consumers", ["hello"])
+    time.sleep(1.5)
 
     # This should grab "hello" from every partition and every topic
     # c1.rebalance()
     result = c1.fetch()
 
-    assert_equals(len(set(result.broker_partitions)), topology_001.total_partitions)
+    assert_equals(len(set(result.broker_partitions)), topology_3x5.total_partitions)
     for msg_set in result:
         assert_equals(msg_set.messages, ["hello"])
 
-def test_001_zookeeper_invalid_offset():
+def test_3x5_zookeeper_invalid_offset():
     """Test recovery from bad ZK offset value
 
     If ZooKeeper stored an invalid start offset, we should print an ERROR
     and start from the latest."""
-    log_break("test_001_zookeeper_invalid_offset")
+    log_break("test_3x5_zookeeper_invalid_offset")
 
-    # p = ZKProducer(ZK_CONNECT_STR, "topic_001_zookeeper_invalid_offset")
     c1 = ZKConsumer(ZK_CONNECT_STR, 
-                    "group_001_zookeeper_invalid_offset", 
-                    "topic_001_zookeeper_invalid_offset",
+                    "group_3x5_zookeeper_invalid_offset", 
+                    "topic_3x5_zookeeper_invalid_offset",
                     autocommit=True)
     
-    # First we seed each partition with something...
-    #for i in range(topology_001.total_partitions):
-    #    p.send(["hello"], i)
-    for kafka_server in RunConfig.kafka_servers:
-        k = Kafka("localhost", kafka_server.kafka_config.port)
-        for partition in range(topology_001.partitions_per_broker):
-            k.produce("topic_001_zookeeper_invalid_offset", ["hello"], partition)
-
+    send_to_all_partitions("topic_3x5_zookeeper_invalid_offset", ["hello"])
     time.sleep(1)
 
     # The following fetch will also save the ZK offset (autocommit=True)
@@ -391,19 +386,14 @@ def test_001_zookeeper_invalid_offset():
 
     # Now delete c1, and create c2, which will take over all of it's partitions
     c2 = ZKConsumer(ZK_CONNECT_STR, 
-                    "group_001_zookeeper_invalid_offset", 
-                    "topic_001_zookeeper_invalid_offset",
+                    "group_3x5_zookeeper_invalid_offset", 
+                    "topic_3x5_zookeeper_invalid_offset",
                     autocommit=True)
     # This should detect that the values in ZK are bad, and put us at the real
     # end offset.
     c2.fetch()
                
-    # for i in range(topology_001.total_partitions):
-    #    p.send(["world"], i)
-    for kafka_server in RunConfig.kafka_servers:
-        k = Kafka("localhost", kafka_server.kafka_config.port)
-        for partition in range(topology_001.partitions_per_broker):
-            k.produce("topic_001_zookeeper_invalid_offset", ["world"], partition)
+    send_to_all_partitions("topic_3x5_zookeeper_invalid_offset", ["world"])
     time.sleep(1.5)
 
     result = c2.fetch()
@@ -411,13 +401,13 @@ def test_001_zookeeper_invalid_offset():
     for msg_set in result:
         assert_equals(msg_set.messages, ["world"])
     
-def test_001_reconnects():
+def test_3x5_reconnects():
     """Test that we keep trying to read, even if our brokers go down.
 
     We're going to:
 
     1. Send messages to all partitions in a topic, across all brokers
-    2. Start polling (this will cause the Consumer to rebalance itself and find
+    2. Do a fetch (this will cause the Consumer to rebalance itself and find
        everything).
     3. Set the Consumer to disable rebalancing.
     4. Shut down one of the brokers
@@ -430,42 +420,45 @@ def test_001_reconnects():
     hitting it. We don't want to risk messing up other consumers by grabbing
     partitions that might belong to them.
     """
-    for kafka_server in RunConfig.kafka_servers:
-        k = Kafka("localhost", kafka_server.kafka_config.port)
-        for partition in range(topology_001.partitions_per_broker):
-            k.produce("topic_001_reconnects", ["Rusty"], partition)
-    time.sleep(1.5)
+    send_to_all_partitions("topic_3x5_reconnects", ["Rusty"])
+    time.sleep(2)
 
-    fail_server = RunConfig.kafka_servers[0]
-
-    c1 = ZKConsumer(ZK_CONNECT_STR, "group_001_reconnects", "topic_001_reconnects")
+    c1 = ZKConsumer(ZK_CONNECT_STR, "group_3x5_reconnects", "topic_3x5_reconnects")
     result = c1.fetch()
+    assert_equal(topology_3x5.total_partitions, len(result))
+    for msg_set in result:
+        assert_equal(msg_set.messages, ["Rusty"])
 
     # Disable rebalancing to force the consumer to read from the broker we're 
     # going to kill
     c1.disable_rebalance()
+    fail_server = RunConfig.kafka_servers[0]
     fail_server.stop()
     time.sleep(1.5)
 
-    assert_raises(ConnectionFailure, c1.fetch)
-    # We're also not catching the socket error properly here, which is what
-    # happens on subsequent fetches after the initial fetch failure. But that
-    # should be handled deeper in the stack.
-    # 1/0
+    # Now send messages to the non-dead brokers
+    for kafka_server in RunConfig.kafka_servers[1:]:
+        k = Kafka("localhost", kafka_server.kafka_config.port)
+        for partition in range(topology_3x5.partitions_per_broker):
+            k.produce("topic_3x5_reconnects", ["Jack"], partition)
 
-    #     if i == 4:
-    #         # By now we've done a couple of read attempts and not blown up.
-    #         fail_server.start()
-    #     
-    #     if i == 6:
-    #         # Now send some messages to the broker
-    #         k = Kafka("localhost", fail-server.kafka_config.port)
-    #         for partition in range(topology_001.partitions_per_broker):
-    #             k.produce("topic_001_reconnects", ["Clyde"])
-    #         time.sleep(1)
-    #     
-    #     if i == 7:
-    #         assert_equal
+    # A straight fetch will give us a connection failure because it couldn't
+    # reach the first broker. It won't increment any of the other partitions --
+    # the whole thing should fail without any side effect.
+    assert_raises(ConnectionFailure, c1.fetch)
+
+    # But a fetch told to ignore failures will return the results from the other
+    # brokers.
+    result = c1.fetch(ignore_failures=True)
+    assert_equal(topology_3x5.total_partitions - topology_3x5.partitions_per_broker,
+                 len(result))
+
+    # print [msg_set.messages for msg_set in result]
+
+    #for msg_set in result:
+    #    assert_equal(msg_set.messages, ["Jack"])
+
+
 
 
 
