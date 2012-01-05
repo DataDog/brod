@@ -28,22 +28,22 @@ change the Kafka server topology by using nosetest's @with_setup decorator and
 passing it a ServerTopology object. By convention, the test functions are named
 after the topology that they're using. For example:
 
-topology_003 = ServerTopology("003", 3, 5) # 3 brokers, 5 partitions each
+topology_3x5 = ServerTopology("3x5", 3, 5) # 3 brokers, 5 partitions each
 
-@with_setup(setup_servers(topology_003)) 
-def test_003_something():
+@with_setup(setup_servers(topology_3x5)) 
+def test_3x5_something():
     ...
 
-def test_003_something_else():
+def test_3x5_something_else():
     ...
 
-topology_004 = ServerTopology("004", 1, 1) # 1 broker, 1 partition
+topology_1x1 = ServerTopology("1x1", 1, 1) # 1 broker, 1 partition
 
-@with_setup(setup_servers(topology_004)) 
-def test_004_something():
+@with_setup(setup_servers(topology_1x1)) 
+def test_1x1_something():
     ...
 
-def test_004_something_else():
+def test_1x1_something_else():
     ...
 
 If you have a test that you want to run with multiple topologies:
@@ -54,7 +54,8 @@ If you have a test that you want to run with multiple topologies:
    real test with the appropriate arguments.
 
 Finally: Try to use different consumer group names if at all possible, so that
-the tests with the same topology setup won't interfere with each other.
+the tests with the same topology setup won't interfere with each other. I've 
+adopted the convention of "{# of kafka servers}x{partitions per broker}"
 
 TODO/FIXME:
 1. We could save time at the expense of memory if we're willing to spin up all
@@ -69,6 +70,11 @@ TODO/FIXME:
    servers are torn down, but something in the ZooKeeper library isn't getting
    deleted properly when things go out of scope. The upshot is that devs might
    get lots of superflous ZooKeeper errors in their logs.
+
+3. There's currently no testing of what happens to us in the case of ZooKeeper 
+   failures. Though Kafka itself relies on ZooKeeper in the default 
+   configuration, so I don't know if there's much we can do aside from fail
+   with a clear error message.
 """
 import logging
 import os
@@ -169,8 +175,8 @@ class RunConfig(object):
 
     Don't directly reset these values yourself. If you need a new configuration
     for a set of tests, give your test the decorator:
-        group_3x5 = ServerTopology("001", 3, 5)
-        @with_setup(setup_servers(group_3x5))
+        topology_3x5 = ServerTopology("3x5", 3, 5)
+        @with_setup(setup_servers(topology_3x5))
         def test_something():
             # do stuff here
     """
@@ -476,13 +482,3 @@ def test_3x5_reconnects():
                  len([msg_set for msg_set in result
                       if msg_set.messages == ["Jack"]]))
     
-
-
-
-
-
-
-
-
-
-
