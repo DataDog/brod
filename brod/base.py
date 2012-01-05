@@ -314,15 +314,21 @@ class BaseKafka(object):
         
         # Send the request. The logic for handling the response 
         # is in _read_fetch_response().
-        return self._write(
-            fetch_request_size, 
-            partial(self._wrote_request_size, 
-                    fetch_request, 
-                    partial(self._read_fetch_response, 
-                            callback, 
-                            offset, 
-                            include_corrupt
-                            )))
+        try:
+            result = self._write(
+                fetch_request_size, 
+                partial(self._wrote_request_size, 
+                        fetch_request, 
+                        partial(self._read_fetch_response, 
+                                callback, 
+                                offset, 
+                                include_corrupt
+                                )))
+        except IOError as io_err:
+            kafka_log.exception(io_err)
+            raise ConnectionFailure("Fetch failure because of: {0}".format(io_err))
+
+        return result
 
     def offsets(self, topic, time_val, max_offsets, partition=None, callback=None):
         

@@ -18,7 +18,8 @@ from itertools import chain
 import zookeeper
 from zc.zk import ZooKeeper, FailedConnect
 
-from brod.base import BrokerPartition, ConsumerStats, FetchResult, KafkaError, MessageSet, OffsetOutOfRange
+from brod.base import BrokerPartition, ConsumerStats, MessageSet
+from brod.base import ConnectionFailure, FetchResult, KafkaError, OffsetOutOfRange
 from brod.blocking import Kafka
 
 log = logging.getLogger('brod.zk')
@@ -151,7 +152,7 @@ class ZKUtil(object):
                 # None is the default value when we don't know what the next
                 # offset is, possibly because the MessageSet is empty...
                 if next_offset is not None:
-                    print "Node %s: setting to %s" % (offset_node, next_offset)
+                    log.debug("Node %s: setting to %s" % (offset_node, next_offset))
                     offset_node.set(string_value=str(next_offset))
  
     def broker_ids_for(self, topic):
@@ -422,7 +423,7 @@ class ZKConsumer(object):
         
         return SimpleConsumer(self.topic, broker_partitions)
 
-    def fetch(self, max_size=None):
+    def fetch(self, max_size=None, retry_limit=3):
         """Return a FetchResult, which can be iterated over as a list of 
         MessageSets.
 

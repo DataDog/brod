@@ -87,7 +87,7 @@ from nose.tools import *
 
 from zc.zk import ZooKeeper
 
-from brod import Kafka
+from brod import Kafka, ConnectionFailure
 from brod.zk import ZKConsumer, ZKProducer
 
 class ServerTopology(namedtuple('ServerTopology',
@@ -404,7 +404,7 @@ def test_001_zookeeper_invalid_offset():
         k = Kafka("localhost", kafka_server.kafka_config.port)
         for partition in range(topology_001.partitions_per_broker):
             k.produce("topic_001_zookeeper_invalid_offset", ["world"], partition)
-    time.sleep(1)
+    time.sleep(1.5)
 
     result = c2.fetch()
     assert result
@@ -412,8 +412,63 @@ def test_001_zookeeper_invalid_offset():
         assert_equals(msg_set.messages, ["world"])
     
 def test_001_reconnects():
-    """Test that we keep trying to read, even if our brokers go down."""
-    1/0
+    """Test that we keep trying to read, even if our brokers go down.
+
+    We're going to:
+
+    1. Send messages to all partitions in a topic, across all brokers
+    2. Start polling (this will cause the Consumer to rebalance itself and find
+       everything).
+    3. Set the Consumer to disable rebalancing.
+    4. Shut down one of the brokers
+    5. Assert that nothing blows up
+    6. Restart the broker and assert that it continues to run.
+
+    Note that the partition split is always based on what's in ZooKeeper. So 
+    even if the broker is dead or unreachable, we still keep its partitions and 
+    try to contact it. Maybe there's a firewall issue preventing our server from
+    hitting it. We don't want to risk messing up other consumers by grabbing
+    partitions that might belong to them.
+    """
+    for kafka_server in RunConfig.kafka_servers:
+        k = Kafka("localhost", kafka_server.kafka_config.port)
+        for partition in range(topology_001.partitions_per_broker):
+            k.produce("topic_001_reconnects", ["Rusty"], partition)
+    time.sleep(1.5)
+
+    fail_server = RunConfig.kafka_servers[0]
+
+    c1 = ZKConsumer(ZK_CONNECT_STR, "group_001_reconnects", "topic_001_reconnects")
+    result = c1.fetch()
+
+    # Disable rebalancing to force the consumer to read from the broker we're 
+    # going to kill
+    c1.disable_rebalance()
+    fail_server.stop()
+    time.sleep(1.5)
+
+    assert_raises(ConnectionFailure, c1.fetch)
+    # We're also not catching the socket error properly here, which is what
+    # happens on subsequent fetches after the initial fetch failure. But that
+    # should be handled deeper in the stack.
+    # 1/0
+
+    #     if i == 4:
+    #         # By now we've done a couple of read attempts and not blown up.
+    #         fail_server.start()
+    #     
+    #     if i == 6:
+    #         # Now send some messages to the broker
+    #         k = Kafka("localhost", fail-server.kafka_config.port)
+    #         for partition in range(topology_001.partitions_per_broker):
+    #             k.produce("topic_001_reconnects", ["Clyde"])
+    #         time.sleep(1)
+    #     
+    #     if i == 7:
+    #         assert_equal
+
+
+
 
 
 
