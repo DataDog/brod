@@ -15,6 +15,9 @@ Current assumptions this script makes:
    instances. This is not something we can set in the config file -- we have
    to pass it in the form of an environment var JMX_PORT.
 5. You have a /tmp directory
+6. You don't run any of the kafka shutdown scripts in kafka/bin while these
+   tests are running. (kafka-server-stop.sh for instance just greps for all
+   processes with kafka.Kafka in it and kills them -- so it'll bork our tests)
 
 What you need to run the tests:
 
@@ -105,6 +108,56 @@ ZK_CONNECT_STR = "localhost:{0}".format(ZK_PORT)
 
 log = logging.getLogger("brod")
 
+class KafkaServer(object):
+
+    def __init__(self, kafka_config):
+        self.kafka_config = kafka_config
+        self.process = None
+
+    def start(self):
+        env = os.environ.copy()
+        env["JMX_PORT"] = str(self.kafka_config.jmx_port)
+        log.info("SETUP: Starting Kafka with config {0}".format(self.kafka_config))
+        run_log = "kafka_{0}.log".format(self.kafka_config.broker_id)
+        run_errs = "kafka_error_{0}.log".format(self.kafka_config.broker_id)
+        self.process = Popen(["kafka-run-class.sh",
+                              "kafka.Kafka", 
+                              self.kafka_config.config_file],
+                             stdout=open("{0}/{1}".format(RunConfig.run_dir, run_log), "wb"),
+                             stderr=open("{0}/{1}".format(RunConfig.run_dir, run_errs), "wb"),
+                             shell=False,
+                             preexec_fn=os.setsid,
+                             env=env)
+    
+    def stop(self):
+        if self.process:
+            log.info("TEARDOWN: Terminating Kafka process {0}".format(self.process))
+            os.killpg(self.process.pid, signal.SIGTERM)
+            self.process = None
+
+    @classmethod
+    def setup(cls, num_instances, num_partitions):
+        config_dir, data_dir = create_run_dirs("kafka/config", "kafka/data")
+
+        # Write this session's config file...
+        configs = []
+        for i in range(num_instances):
+            config_file = os.path.join(config_dir, 
+                                       "kafka.{0}.properties".format(i))
+            log_dir = os.path.join(data_dir, str(i))
+            os.makedirs(log_dir)
+            kafka_config = KafkaConfig(config_file=config_file,
+                                       broker_id=i,
+                                       port=KAFKA_BASE_PORT + i,
+                                       log_dir=log_dir,
+                                       num_partitions=num_partitions,
+                                       zk_server="localhost:{0}".format(ZK_PORT),
+                                       jmx_port=JMX_BASE_PORT + i)
+            configs.append(kafka_config)
+            write_config("kafka.properties", config_file, kafka_config)
+
+        return [KafkaServer(c) for c in configs]
+        
 
 class RunConfig(object):
     """This container class just has a bunch of class level vars that are 
@@ -118,21 +171,18 @@ class RunConfig(object):
         def test_something():
             # do stuff here
     """
-    kafka_configs = None
-    kafka_processes = None
+    kafka_servers = None
     run_dir = None
     zk_config = None
     zk_process = None
 
     @classmethod
     def clear(cls):
-        cls.kafka_configs = cls.kafka_processes = cls.run_dir = cls.zk_config \
-                          = cls.zk_process = None
+        cls.kafka_servers = cls.run_dir = cls.zk_config = cls.zk_process = None
+
     @classmethod
     def is_running(cls):
-        return any([cls.kafka_configs, cls.kafka_processes, cls.run_dir, 
-                    cls.zk_config, cls.zk_process])
-
+        return any([cls.kafka_servers, cls.run_dir, cls.zk_config, cls.zk_process])
 
 def setup_servers(topology):
     def run_setup():
@@ -150,8 +200,6 @@ def setup_servers(topology):
 
         # Set up configuration and data directories for ZK and Kafka
         RunConfig.zk_config = setup_zookeeper()
-        RunConfig.kafka_configs = setup_kafka(topology.num_brokers, 
-                                              topology.partitions_per_broker)
 
         # Start ZooKeeper...
         log.info("SETUP: Starting ZooKeeper with config {0}"
@@ -170,22 +218,10 @@ def setup_servers(topology):
         # Start Kafka. We use kafka-run-class.sh instead of 
         # kafka-server-start.sh because the latter sets the JMX_PORT to 9999
         # and we want to set it differently for each Kafka instance
-        RunConfig.kafka_processes = []
-        for kafka_config in RunConfig.kafka_configs:
-            env = os.environ.copy()
-            env["JMX_PORT"] = str(kafka_config.jmx_port)
-            log.info("SETUP: Starting Kafka with config {0}".format(kafka_config))
-            run_log = "kafka_{0}.log".format(kafka_config.broker_id)
-            run_errs = "kafka_error_{0}.log".format(kafka_config.broker_id)
-            process = Popen(["kafka-run-class.sh",
-                             "kafka.Kafka", 
-                             kafka_config.config_file],
-                             stdout=open("{0}/{1}".format(RunConfig.run_dir, run_log), "wb"),
-                             stderr=open("{0}/{1}".format(RunConfig.run_dir, run_errs), "wb"),
-                             shell=False,
-                             preexec_fn=os.setsid,
-                             env=env)
-            RunConfig.kafka_processes.append(process)
+        RunConfig.kafka_servers = KafkaServer.setup(topology.num_brokers, 
+                                                    topology.partitions_per_broker)
+        for kafka_server in RunConfig.kafka_servers:
+            kafka_server.start()
         
         # Now give the Kafka instances a little time to spin up...
         time.sleep(2)
@@ -202,28 +238,6 @@ def setup_zookeeper():
 
     return zk_config
 
-def setup_kafka(num_instances, num_partitions):
-    config_dir, data_dir = create_run_dirs("kafka/config", "kafka/data")
-
-    # Write this session's config file...
-    configs = []
-    for i in range(num_instances):
-        config_file = os.path.join(config_dir, 
-                                   "kafka.{0}.properties".format(i))
-        log_dir = os.path.join(data_dir, str(i))
-        os.makedirs(log_dir)
-        kafka_config = KafkaConfig(config_file=config_file,
-                                   broker_id=i,
-                                   port=KAFKA_BASE_PORT + i,
-                                   log_dir=log_dir,
-                                   num_partitions=num_partitions,
-                                   zk_server="localhost:{0}".format(ZK_PORT),
-                                   jmx_port=JMX_BASE_PORT + i)
-        configs.append(kafka_config)
-        write_config("kafka.properties", config_file, kafka_config)
-
-    return configs
-
 def teardown():
     # Have to kill Kafka before ZooKeeper, or Kafka will get very distraught
     # You can't kill the processes with Popen.terminate() because what we
@@ -233,9 +247,8 @@ def teardown():
     if not RunConfig.is_running():
         return
 
-    for process in RunConfig.kafka_processes:
-        log.info("TEARDOWN: Terminating Kafka process {0}".format(process))
-        os.killpg(process.pid, signal.SIGTERM)
+    for kafka_server in RunConfig.kafka_servers:
+        kafka_server.stop()
 
     log.info("TEARDOWN: Terminating ZooKeeper process {0}"
              .format(RunConfig.zk_process))
@@ -271,6 +284,14 @@ def print_zk_snapshot():
     zk = ZooKeeper(ZK_CONNECT_STR)
     print zk.export_tree(ephemeral=True)
 
+def log_break(method_name):
+    """Try to make it a little easier to see where we switch to different 
+    sections in the log"""
+    log.info("")
+    log.info("*************************** {0} ***************************"
+             .format(method_name))
+    log.info("")
+
 ################################ TESTS BEGIN ###################################
 
 topology_001 = ServerTopology("001", 3, 5) # 3 brokers, 5 partitions each
@@ -278,11 +299,12 @@ topology_001 = ServerTopology("001", 3, 5) # 3 brokers, 5 partitions each
 @with_setup(setup_servers(topology_001)) 
 def test_001_consumer_rebalancing():
     """Consumer rebalancing, with auto rebalancing."""
-    for kafka_config in RunConfig.kafka_configs:
-       k = Kafka("localhost", kafka_config.port)
-       for topic in ["t1", "t2", "t3"]:
-          k.produce(topic, ["bootstrap"], 0)
-          time.sleep(1)
+    log_break("test_001_consumer_rebalancing")
+    for kafka_server in RunConfig.kafka_servers:
+        k = Kafka("localhost", kafka_server.kafka_config.port)
+        for topic in ["t1", "t2", "t3"]:
+            k.produce(topic, ["bootstrap"], 0)
+            time.sleep(1)
 
     producer = ZKProducer(ZK_CONNECT_STR, "t1")
     assert_equals(len(producer.broker_partitions), topology_001.total_partitions,
@@ -313,13 +335,14 @@ def test_001_consumer_rebalancing():
 
 def test_001_consumers():
     """Multi-broker/partition fetches"""
+    log_break("test_001_consumers")
     c1 = ZKConsumer(ZK_CONNECT_STR, "group_001_consumers", "topic_001_consumers")
     
     result = c1.fetch()
     assert_equals(len(result), 0, "This shouldn't error, but it should be empty")
 
-    for kafka_config in RunConfig.kafka_configs:
-        k = Kafka("localhost", kafka_config.port)
+    for kafka_server in RunConfig.kafka_servers:
+        k = Kafka("localhost", kafka_server.kafka_config.port)
         for partition in range(topology_001.partitions_per_broker):
             k.produce("topic_001_consumers", ["hello"], partition)
     time.sleep(2)
@@ -337,6 +360,8 @@ def test_001_zookeeper_invalid_offset():
 
     If ZooKeeper stored an invalid start offset, we should print an ERROR
     and start from the latest."""
+    log_break("test_001_zookeeper_invalid_offset")
+
     # p = ZKProducer(ZK_CONNECT_STR, "topic_001_zookeeper_invalid_offset")
     c1 = ZKConsumer(ZK_CONNECT_STR, 
                     "group_001_zookeeper_invalid_offset", 
@@ -346,8 +371,8 @@ def test_001_zookeeper_invalid_offset():
     # First we seed each partition with something...
     #for i in range(topology_001.total_partitions):
     #    p.send(["hello"], i)
-    for kafka_config in RunConfig.kafka_configs:
-        k = Kafka("localhost", kafka_config.port)
+    for kafka_server in RunConfig.kafka_servers:
+        k = Kafka("localhost", kafka_server.kafka_config.port)
         for partition in range(topology_001.partitions_per_broker):
             k.produce("topic_001_zookeeper_invalid_offset", ["hello"], partition)
 
@@ -375,16 +400,19 @@ def test_001_zookeeper_invalid_offset():
                
     # for i in range(topology_001.total_partitions):
     #    p.send(["world"], i)
-    for kafka_config in RunConfig.kafka_configs:
-        k = Kafka("localhost", kafka_config.port)
+    for kafka_server in RunConfig.kafka_servers:
+        k = Kafka("localhost", kafka_server.kafka_config.port)
         for partition in range(topology_001.partitions_per_broker):
             k.produce("topic_001_zookeeper_invalid_offset", ["world"], partition)
     time.sleep(1)
 
     result = c2.fetch()
+    assert result
     for msg_set in result:
         assert_equals(msg_set.messages, ["world"])
     
+def test_001_reconnects():
+    """Test that we keep trying to read, even if our brokers go down."""
 
 
 
