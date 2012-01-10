@@ -9,10 +9,9 @@ from brod import (
     InvalidOffset,
 )
 
-from brod.nonblocking import KafkaTornado
-
 try:
     from tornado.testing import AsyncTestCase, LogTrapTestCase
+    from brod.nonblocking import KafkaTornado
     has_tornado = True
 except ImportError:
     has_tornado = False
