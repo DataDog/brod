@@ -16,6 +16,11 @@ try:
 except ImportError:
     has_tornado = False
 
+# Messages are not available to clients until they have been flushed.
+# By default is is 1000ms, see log.default.flush.interval.ms in 
+# server.properties
+MESSAGE_DELAY_SECS = (1000 * 2) / 1000
+
 def get_unique_topic(name):
     return '{0}-{1}'.format(time.time(), name)
 
@@ -28,6 +33,7 @@ class TestKafkaBlocking(unittest.TestCase):
         input_messages = ['message0', 'message1', 'message2']
         
         kafka.produce(topic, input_messages)
+        time.sleep(MESSAGE_DELAY_SECS)
         fetch_results = kafka.fetch(topic, start_offset)
         
         output_messages = []
@@ -72,6 +78,7 @@ if has_tornado:
 
             kafka.produce(topic, input_messages, callback=self.stop)
             self.wait()
+            time.sleep(MESSAGE_DELAY_SECS)
             
             kafka.fetch(topic, start_offset, 
                 callback=self.stop)
@@ -123,7 +130,7 @@ class TestTopic(unittest.TestCase):
         # If you don't do this sleep, then you can get into a condition where
         # a fetch immediately after a produce will cause a state where the 
         # produce is duplicated (it really gets that way in Kafka).
-        time.sleep(1)
+        time.sleep(MESSAGE_DELAY_SECS)
         self.dogs_queue = self.k.topic(self.topic_name)
         
         # print list(self.k.fetch(self.topic_name, 0))
