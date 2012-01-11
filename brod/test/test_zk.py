@@ -312,6 +312,9 @@ def send_to_all_partitions(topic, messages):
         for partition in range(topology_3x5.partitions_per_broker):
             k.produce(topic, messages, partition)
 
+def delay(seconds=MESSAGE_DELAY_SECS):
+    time.sleep(seconds)
+
 ################################ TESTS BEGIN ###################################
 
 topology_3x5 = ServerTopology("3x5", 3, 5) # 3 brokers, 5 partitions each
@@ -324,7 +327,7 @@ def test_3x5_consumer_rebalancing():
         k = Kafka("localhost", kafka_server.kafka_config.port)
         for topic in ["t1", "t2", "t3"]:
             k.produce(topic, ["bootstrap"], 0)
-    time.sleep(MESSAGE_DELAY_SECS)
+    delay()
 
     producer = ZKProducer(ZK_CONNECT_STR, "t1")
     assert_equals(len(producer.broker_partitions), topology_3x5.total_partitions,
@@ -336,7 +339,7 @@ def test_3x5_consumer_rebalancing():
     c2 = ZKConsumer(ZK_CONNECT_STR, "group_3x5", "t1")
     assert_equals(len(c2.broker_partitions), (topology_3x5.total_partitions) / 2)
 
-    time.sleep(MESSAGE_DELAY_SECS)
+    delay()
     assert_equals(len(set(c1.broker_partitions + c2.broker_partitions)),
                   topology_3x5.total_partitions,
                   "We should have all broker partitions covered.")
@@ -344,7 +347,7 @@ def test_3x5_consumer_rebalancing():
     c3 = ZKConsumer(ZK_CONNECT_STR, "group_3x5", "t1")
     assert_equals(len(c3.broker_partitions), (topology_3x5.total_partitions) / 3)
 
-    time.sleep(MESSAGE_DELAY_SECS)
+    delay()
     assert_equals(sum(len(c.broker_partitions) for c in [c1, c2, c3]),
                   topology_3x5.total_partitions,
                   "All BrokerPartitions should be accounted for.")
@@ -362,7 +365,7 @@ def test_3x5_consumers():
     assert_equals(len(result), 0, "This shouldn't error, but it should be empty")
 
     send_to_all_partitions("topic_3x5_consumers", ["hello"])
-    time.sleep(MESSAGE_DELAY_SECS)
+    delay()
 
     # This should grab "hello" from every partition and every topic
     # c1.rebalance()
@@ -385,7 +388,7 @@ def test_3x5_zookeeper_invalid_offset():
                     autocommit=True)
     
     send_to_all_partitions("topic_3x5_zookeeper_invalid_offset", ["hello"])
-    time.sleep(MESSAGE_DELAY_SECS)
+    delay()
 
     # The following fetch will also save the ZK offset (autocommit=True)
     result = c1.fetch()
@@ -396,7 +399,7 @@ def test_3x5_zookeeper_invalid_offset():
     bps_to_fake_offsets = dict((bp, 1000) for bp in c1.broker_partitions)
     z1.save_offsets_for(c1.consumer_group, bps_to_fake_offsets)
     c1.close()
-    time.sleep(MESSAGE_DELAY_SECS)
+    delay()
 
     # Now delete c1, and create c2, which will take over all of it's partitions
     c2 = ZKConsumer(ZK_CONNECT_STR, 
@@ -408,7 +411,7 @@ def test_3x5_zookeeper_invalid_offset():
     c2.fetch()
                
     send_to_all_partitions("topic_3x5_zookeeper_invalid_offset", ["world"])
-    time.sleep(MESSAGE_DELAY_SECS)
+    delay()
 
     result = c2.fetch()
     assert result
@@ -438,7 +441,7 @@ def test_3x5_reconnects():
     partitions that might belong to them.
     """
     send_to_all_partitions("topic_3x5_reconnects", ["Rusty"])
-    time.sleep(MESSAGE_DELAY_SECS)
+    delay()
 
     c1 = ZKConsumer(ZK_CONNECT_STR, "group_3x5_reconnects", "topic_3x5_reconnects")
     result = c1.fetch()
@@ -448,14 +451,14 @@ def test_3x5_reconnects():
 
     # Now send another round of messages to our broker partitions
     send_to_all_partitions("topic_3x5_reconnects", ["Jack"])
-    time.sleep(MESSAGE_DELAY_SECS)
+    delay()
 
     # Disable rebalancing to force the consumer to read from the broker we're 
     # going to kill, and then kill it.
     c1.disable_rebalance()
     fail_server = RunConfig.kafka_servers[0]
     fail_server.stop()
-    time.sleep(MESSAGE_DELAY_SECS)
+    delay()
 
     # A straight fetch will give us a connection failure because it couldn't
     # reach the first broker. It won't increment any of the other partitions --
@@ -472,7 +475,7 @@ def test_3x5_reconnects():
 
     # Now we restart the failed Kafka broker, and do another fetch...
     fail_server.start()
-    time.sleep(MESSAGE_DELAY_SECS)
+    delay()
 
     result = c1.fetch()
     # This should have MessageSets from all brokers (they're all reachable)
@@ -506,7 +509,7 @@ def test_3x5_producer_bootstrap():
     # to the 0th partition of that broker.
     assert_equal(broker_partition.partition, 0)
 
-    time.sleep(2)
+    delay()
     # But now, enough time should have passed that the broker we sent it to has
     # published to ZooKeeper how many partitions it really has for this topic.
     # So the number of broker partitions detected would be:
