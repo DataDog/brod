@@ -11,10 +11,13 @@ It's named after Max Brod, Franz Kafka's friend and supporter.
 
 You need to have access to your Kafka instance and be able to connect through
 TCP. You can obtain a copy and instructions on how to setup kafka at
-https://github.com/kafka-dev/kafka
+http://incubator.apache.org/kafka/
 
 ## Installation
-easy_install brod
+
+`easy_install brod`
+
+**Note:** the `zc.zk` package has a dependency on Python Zoo Keeper bindings which are not included during it's installation. They can be installed with `easy_install zc-zookeeper-static` see the `zc.zk` documentation for more information http://pypi.python.org/pypi/zc.zk/0.5.
 
 ## Usage
 
