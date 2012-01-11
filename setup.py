@@ -3,12 +3,12 @@
 import setuptools
 
 install_requires = [
-    "zc.zk==0.2.0",
+    "zc.zk==0.5.2",
 ]
 
 setuptools.setup(
     name = 'brod',
-    version = '0.1.7',
+    version = '0.1.8',
     license = 'MIT',
     description = open('README.md').read(),
     author = "Datadog, Inc.",
