@@ -115,7 +115,7 @@ ZK_CONNECT_STR = "localhost:{0}".format(ZK_PORT)
 # Messages are not available to clients until they have been flushed.
 # By default is is 1000ms, see log.default.flush.interval.ms in 
 # server.properties
-MESSAGE_DELAY_SECS = (1000 * 2) / 1000.0
+MESSAGE_DELAY_SECS = (1000 * 1) / 1000.0
 
 log = logging.getLogger("brod")
 
@@ -227,7 +227,7 @@ def setup_servers(topology):
                                       preexec_fn=os.setsid)
         # Give ZK a little time to finish starting up before we start spawning
         # Kafka instances to connect to it.
-        time.sleep(3)
+        delay(3)
 
         # Start Kafka. We use kafka-run-class.sh instead of 
         # kafka-server-start.sh because the latter sets the JMX_PORT to 9999
@@ -238,7 +238,7 @@ def setup_servers(topology):
             kafka_server.start()
         
         # Now give the Kafka instances a little time to spin up...
-        time.sleep(3)
+        delay(3)
     
     return run_setup
 
@@ -510,6 +510,13 @@ def test_3x5_producer_bootstrap():
     assert_equal(broker_partition.partition, 0)
 
     delay()
+
+    # Force it to redetect broker partitions (this would normally be done on 
+    # a send)
+    p1.send(["aloha"])
+    # p1.detect_broker_partitions()
+    # print_zk_snapshot()
+
     # But now, enough time should have passed that the broker we sent it to has
     # published to ZooKeeper how many partitions it really has for this topic.
     # So the number of broker partitions detected would be:
