@@ -84,10 +84,7 @@ import subprocess
 import time
 from collections import namedtuple
 from datetime import datetime
-from functools import partial
-from itertools import chain
 from subprocess import Popen
-from unittest import TestCase
 
 from nose.tools import *
 
@@ -492,11 +489,7 @@ def test_3x5_reconnects():
 
 def test_3x5_producer_bootstrap():
     """Test that ZKProducers properly bootstrap themselves when creating new 
-    topics. The problem is like this:
-
-    When a Producer is created, it knows what brokers are available.
-
-    """
+    topics."""
     topic = "topic_3x5_producer_bootstrap"
     p1 = ZKProducer(ZK_CONNECT_STR, topic)
 
@@ -508,7 +501,6 @@ def test_3x5_producer_bootstrap():
     # It could have sent it to any of the brokers, but it should only have sent
     # to the 0th partition of that broker.
     assert_equal(broker_partition.partition, 0)
-
     delay()
 
     # Force it to redetect broker partitions (this would normally be done on 
