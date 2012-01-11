@@ -10,6 +10,7 @@ FIXME: Extract the logic for testing how the brokers get partitioned so we can
 import json
 import logging
 import platform
+import random
 import time
 import uuid
 from collections import namedtuple, Mapping
@@ -43,11 +44,20 @@ class ZKUtil(object):
     def close(self):
         self._zk.close()
 
-    def broker_partitions_for(self, topic):
+    def broker_partitions_for(self, topic, force_partition_zero=False):
         """Return a list of BrokerPartitions based on values found in 
-        ZooKeeper."""
+        ZooKeeper.
+
+        If you set force_partition_zero=True, we will always return partition 
+        0 of a broker, even if no topic has been created for it yet. Consumers
+        don't need this, because it means there's nothing there to read anyway.
+        But Producers need to be bootstrapped with it.
+        """
         # Get the broker_ids first...
-        broker_ids = self.broker_ids_for(topic)
+        if force_partition_zero:
+            broker_ids = self.all_broker_ids()
+        else:
+            broker_ids = self.broker_ids_for(topic)
         # log.debug(u"broker_ids: {0}".format(broker_ids))
 
         # Then the broker_strings for each broker
@@ -60,7 +70,12 @@ class ZKUtil(object):
         # Then the num_parts per broker (each could be set differently)
         broker_topic_paths = [self.path_for_broker_topic(broker_id, topic) 
                               for broker_id in broker_ids]
-        num_parts = map(self._zk_properties, broker_topic_paths)
+        
+        # Every broker has at least one partition, even if it's not published
+        num_parts = []
+        for p in broker_topic_paths:
+            broker_parts = self._zk_properties(p) if self._zk.exists(p) else 1
+            num_parts.append(broker_parts)
         # log.debug(u"num_parts: {0}".format(num_parts))
         
         # BrokerPartition
@@ -71,6 +86,7 @@ class ZKUtil(object):
                        in zip(broker_ids, broker_strings, num_parts)
                    )
                )
+
 
     def offsets_state(self, consumer_group):
         """For a given consumer_group, get back a ZK state dict that looks like:
@@ -162,6 +178,16 @@ class ZKUtil(object):
         except zookeeper.NoNodeException:
             log.warn(u"Couldn't find {0} - No brokers have topic {1} yet?"
                      .format(topic_path, topic))
+            return []
+
+        return sorted(int(broker_id) for broker_id in topic_node_children)
+
+    def all_broker_ids(self):
+        brokers_path = self.path_for_brokers()
+        try:
+            topic_node_children = self._zk_children(brokers_path)
+        except zookeeper.NoNodeException:
+            log.error(u"Couldn't find brokers entry {0}".format(brokers_path))
             return []
 
         return sorted(int(broker_id) for broker_id in topic_node_children)
@@ -285,13 +311,14 @@ class ZKProducer(object):
     def __init__(self, zk_conn_str, topic):
         self._id = uuid.uuid1()
         self._topic = topic
+        self._bps_changed = False
         self._zk_util = ZKUtil(zk_conn_str)
 
         # Try to pull the brokers and partitions we can send to on this topic
-        self._broker_partitions = self._zk_util.broker_partitions_for(self.topic)
-        if not self._broker_partitions:
-            raise NoAvailablePartitionsError(
-                u"No brokers were initialized for topic {0}".format(self.topic))
+        self._brokers_watch = None
+        self._topic_watch = None
+        self._register_callbacks()
+        self.detect_broker_partitions()
 
         # This will collapse duplicates so we only have one conn per host/port
         broker_conn_info = frozenset((bp.broker_id, bp.host, bp.port)
@@ -310,15 +337,16 @@ class ZKProducer(object):
     def close(self):
         self._zk_util.close()
 
-    # FIXME: Change this behavior so that it's random if they don't specify
-    #        an explicit key.
-    def send(self, msgs, key=hash):
-        """key can either be a function that takes msgs as an arg and returns
-        a hash number, or it can be an object that Python's hash() will work 
-        on."""
+    def send(self, msgs):
         if not msgs:
             return
-        broker_partition = self._broker_partition_for_msgs(msgs, key)
+
+        if not self._all_callbacks_registered():
+            self._register_callbacks()
+        if self._bps_changed:
+            self.detect_broker_partitions()
+
+        broker_partition = random.choice(self._broker_partitions)
         kafka_conn = self._connections[broker_partition.broker_id]
         kafka_conn.produce(self.topic, msgs, broker_partition.partition)
 
@@ -326,13 +354,37 @@ class ZKProducer(object):
         log.debug(self._log_str(u"sent {0} bytes to {1}"
                                 .format(bytes_sent, broker_partition)))
         return broker_partition
-    
-    def _broker_partition_for_msgs(self, msgs, key=hash):
-        if callable(key): # it's a function to call on msg to determine a hash
-            target_index = key(msgs[0]) % len(self._broker_partitions)
-        else: # they just passed some number or tuple and want us to hash it
-            target_index = hash(key) % len(self._broker_partitions)
-        return self._broker_partitions[target_index]
+
+    def detect_broker_partitions(self):
+        bps = self._zk_util.broker_partitions_for(self.topic, 
+                                                  force_partition_zero=True)
+        if not bps:
+            raise NoAvailablePartitionsError(u"No brokers were found!")
+        
+        self._broker_partitions = bps
+        self._bps_changed = False
+
+    def _unbalance(self, nodes):
+        self._bps_changed = True
+
+    def _register_callbacks(self):
+        zk = self._zk_util._zk # FIXME: Evil breaking of encapsulation
+
+        path_for_brokers = self._zk_util.path_for_brokers()
+        path_for_topic = self._zk_util.path_for_topic(self.topic)
+        if self._brokers_watch is None and zk.exists(path_for_brokers):
+            self._brokers_watch = zk.children(path_for_brokers)(self._unbalance)
+        if self._topic_watch is None and zk.exists(path_for_topic):
+            self._topic_watch = zk.children(path_for_topic)(self._unbalance)
+
+        log.debug("Producer {0} has watches: {1}"
+                  .format(self._id, sorted(zk.watches.data.keys())))
+
+    def _all_callbacks_registered(self):
+        """Are all the callbacks we need to know when to rebalance actually 
+        registered? Some of these (like the topic ones) are the responsibility
+        of the broker to create."""
+        return all([self._brokers_watch, self._topic_watch])
 
     def _log_str(self, s):
         return u"ZKProducer {0} > {1}".format(self._id, s)
@@ -669,7 +721,7 @@ class ZKConsumer(object):
         to be paranoid about rebalancing."""
         return all([self._consumers_watch, 
                     self._brokers_watch,
-                    self._brokers_watch,
+                    self._topics_watch,
                     self._topic_watch])
 
     def _register_callbacks(self):

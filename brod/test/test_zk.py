@@ -55,7 +55,7 @@ If you have a test that you want to run with multiple topologies:
 
 Finally: Try to use different consumer group names if at all possible, so that
 the tests with the same topology setup won't interfere with each other. I've 
-adopted the convention of "{# of kafka servers}x{partitions per broker}"
+adopted the convention of using the function names in the group names.
 
 TODO/FIXME:
 1. We could save time at the expense of memory if we're willing to spin up all
@@ -227,7 +227,7 @@ def setup_servers(topology):
                                       preexec_fn=os.setsid)
         # Give ZK a little time to finish starting up before we start spawning
         # Kafka instances to connect to it.
-        time.sleep(2)
+        time.sleep(3)
 
         # Start Kafka. We use kafka-run-class.sh instead of 
         # kafka-server-start.sh because the latter sets the JMX_PORT to 9999
@@ -238,7 +238,7 @@ def setup_servers(topology):
             kafka_server.start()
         
         # Now give the Kafka instances a little time to spin up...
-        time.sleep(2)
+        time.sleep(3)
     
     return run_setup
 
@@ -486,4 +486,45 @@ def test_3x5_reconnects():
     assert_equal(topology_3x5.partitions_per_broker,
                  len([msg_set for msg_set in result
                       if msg_set.messages == ["Jack"]]))
+
+def test_3x5_producer_bootstrap():
+    """Test that ZKProducers properly bootstrap themselves when creating new 
+    topics. The problem is like this:
+
+    When a Producer is created, it knows what brokers are available.
+
+    """
+    topic = "topic_3x5_producer_bootstrap"
+    p1 = ZKProducer(ZK_CONNECT_STR, topic)
+
+    # This is a new topic, and the Producer can't know how many partitions are.
+    # Therefore, it should assume just the 0th partition for each broker is safe
+    assert_equal(len(p1.broker_partitions), topology_3x5.num_brokers)
+    broker_partition = p1.send(["hi"])
+
+    # It could have sent it to any of the brokers, but it should only have sent
+    # to the 0th partition of that broker.
+    assert_equal(broker_partition.partition, 0)
+
+    time.sleep(2)
+    # But now, enough time should have passed that the broker we sent it to has
+    # published to ZooKeeper how many partitions it really has for this topic.
+    # So the number of broker partitions detected would be:
+    #    (1 broker * number of partitions) + (2 brokers * 1 partition each)
+    assert_equal(len(p1.broker_partitions),
+                 topology_3x5.partitions_per_broker + (topology_3x5.num_brokers - 1))
+
     
+
+
+
+
+
+
+
+
+
+
+
+
+
