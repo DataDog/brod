@@ -115,7 +115,7 @@ ZK_CONNECT_STR = "localhost:{0}".format(ZK_PORT)
 # Messages are not available to clients until they have been flushed.
 # By default is is 1000ms, see log.default.flush.interval.ms in 
 # server.properties
-MESSAGE_DELAY_SECS = (1000 * 2) / 1000
+MESSAGE_DELAY_SECS = (1000 * 2) / 1000.0
 
 log = logging.getLogger("brod")
 
