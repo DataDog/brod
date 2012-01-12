@@ -620,7 +620,10 @@ class BaseKafka(object):
 
 # By David Ormsbee (dave@datadog.com):
 class Partition(object):
-    """A higher level abstraction over the Kafka object to make dealing with
+    """This is deprectated, and should be rolled up into the higher level 
+    Consumers.
+
+    A higher level abstraction over the Kafka object to make dealing with
     Partitions a little easier. Currently only serves to read from a topic.
     
     This class has not been properly tested with the non-blocking KafkaTornado.
@@ -648,6 +651,7 @@ class Partition(object):
         return self._kafka.offsets(self._topic, LATEST_OFFSET, max_offsets=1,
                                    partition=self._partition)[0]
     
+
     # FIXME DO: Put callback in
     # Partition should have it's own fetch() with the basic stuff pre-filled
     def poll(self, 
