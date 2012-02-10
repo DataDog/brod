@@ -8,7 +8,7 @@ install_requires = [
 
 setuptools.setup(
     name = 'brod',
-    version = '0.1.9',
+    version = '0.1.10',
     license = 'MIT',
     description = open('README.md').read(),
     author = "Datadog, Inc.",

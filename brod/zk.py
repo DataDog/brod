@@ -161,7 +161,7 @@ class ZKUtil(object):
                 try:
                     offset_node = self._zk.properties(offset_path)
                 except zookeeper.NoNodeException as ex:
-                    self._create_path_if_needed(offset_path, bps)
+                    self._create_path_if_needed(offset_path, bp)
                     offset_node = self._zk.properties(offset_path)
                     next_offset = 0 # If we're creating the node now, assume we
                                     # need to start at 0.                
