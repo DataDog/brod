@@ -303,10 +303,10 @@ def log_break(method_name):
              .format(method_name))
     log.info("")
 
-def send_to_all_partitions(topic, messages):
+def send_to_all_partitions(partitions_per_broker, topic, messages):
     for kafka_server in RunConfig.kafka_servers:
         k = Kafka("localhost", kafka_server.kafka_config.port)
-        for partition in range(topology_3x5.partitions_per_broker):
+        for partition in range(partitions_per_broker):
             k.produce(topic, messages, partition)
 
 def delay(seconds=MESSAGE_DELAY_SECS):
@@ -315,6 +315,8 @@ def delay(seconds=MESSAGE_DELAY_SECS):
 ################################ TESTS BEGIN ###################################
 
 topology_3x5 = ServerTopology("3x5", 3, 5) # 3 brokers, 5 partitions each
+topology_1x10 = ServerTopology("1x10", 1, 10) # 1 brokers, 10 partitions
+
 
 @with_setup(setup_servers(topology_3x5)) 
 def test_3x5_consumer_rebalancing():
@@ -361,7 +363,7 @@ def test_3x5_consumers():
     result = c1.fetch()
     assert_equals(len(result), 0, "This shouldn't error, but it should be empty")
 
-    send_to_all_partitions("topic_3x5_consumers", ["hello"])
+    send_to_all_partitions(5, "topic_3x5_consumers", ["hello"])
     delay()
 
     # This should grab "hello" from every partition and every topic
@@ -384,7 +386,7 @@ def test_3x5_zookeeper_invalid_offset():
                     "topic_3x5_zookeeper_invalid_offset",
                     autocommit=True)
     
-    send_to_all_partitions("topic_3x5_zookeeper_invalid_offset", ["hello"])
+    send_to_all_partitions(5, "topic_3x5_zookeeper_invalid_offset", ["hello"])
     delay()
 
     # The following fetch will also save the ZK offset (autocommit=True)
@@ -407,7 +409,7 @@ def test_3x5_zookeeper_invalid_offset():
     # end offset.
     c2.fetch()
                
-    send_to_all_partitions("topic_3x5_zookeeper_invalid_offset", ["world"])
+    send_to_all_partitions(5, "topic_3x5_zookeeper_invalid_offset", ["world"])
     delay()
 
     result = c2.fetch()
@@ -437,7 +439,7 @@ def test_3x5_reconnects():
     hitting it. We don't want to risk messing up other consumers by grabbing
     partitions that might belong to them.
     """
-    send_to_all_partitions("topic_3x5_reconnects", ["Rusty"])
+    send_to_all_partitions(5, "topic_3x5_reconnects", ["Rusty"])
     delay()
 
     c1 = ZKConsumer(ZK_CONNECT_STR, "group_3x5_reconnects", "topic_3x5_reconnects")
@@ -447,7 +449,7 @@ def test_3x5_reconnects():
         assert_equal(msg_set.messages, ["Rusty"])
 
     # Now send another round of messages to our broker partitions
-    send_to_all_partitions("topic_3x5_reconnects", ["Jack"])
+    send_to_all_partitions(5, "topic_3x5_reconnects", ["Jack"])
     delay()
 
     # Disable rebalancing to force the consumer to read from the broker we're 
@@ -517,13 +519,38 @@ def test_3x5_producer_bootstrap():
                  topology_3x5.partitions_per_broker + (topology_3x5.num_brokers - 1))
 
     
+@with_setup(setup_servers(topology_1x10)) 
+def test_1x10_partition_split():
+    """Attempt to recreate bug encountered where the first consumer does not 
+    give up the partitions it no longer has a right to keep after a rebalance."""
+    def bp_part_nums(broker_partitions):
+        return sorted(bp.partition for bp in broker_partitions)
 
-
-
-
-
-
-
+    fake_data = ["Hello World" for i in range(10)]
+    send_to_all_partitions(10, "topic_1x10_partition_split", fake_data)
+    delay()
+    c1 = ZKConsumer(ZK_CONNECT_STR, 
+                    "group_1x10_partition_split", 
+                    "topic_1x10_partition_split",
+                    autocommit=True)
+    r1 = c1.fetch() 
+    delay()
+    assert_equal(len(r1.broker_partitions), 10, "c1 should have all 10 partitions")
+    c2 = ZKConsumer(ZK_CONNECT_STR, 
+                    "group_1x10_partition_split", 
+                    "topic_1x10_partition_split",
+                    autocommit=True)
+    send_to_all_partitions(10, "topic_1x10_partition_split", fake_data)
+    delay()
+    # The next time c1's fetch() is called, it should rebalance and reduce itself
+    # to only five partitions. We need to check what's returned in the ResultSet,
+    # not just what our ZKConsumer thinks its partitions are.
+    r1_a = c1.fetch()
+    assert_equal(len(r1_a.broker_partitions), 5, "c1 should have reduced its partitions")
+    assert_equal(bp_part_nums(r1_a.broker_partitions), [0, 1, 2, 3, 4])
+    r2_a = c2.fetch()
+    assert_equal(len(r2_a.broker_partitions), 5, "c2 should have reduced its partitions")
+    assert_equal(bp_part_nums(r2_a.broker_partitions), [5, 6, 7, 8, 9])
 
 
 

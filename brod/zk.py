@@ -487,25 +487,35 @@ class ZKConsumer(object):
         it's not None and if we still have the same offsets, and adjust 
         accordingly.
         """
+        def needs_offset_values_from_zk(bps_to_offsets):
+            """We need to pull offset values from ZK if we have no 
+            BrokerPartitions in our BPs -> Offsets mapping, or if some of those
+            Offsets are unknown (None)"""
+            return (not bps_to_offsets) or (None in bps_to_offsets.values())
+
         log.debug("Fetch called on ZKConsumer {0}".format(self.id))
         if self._needs_rebalance:
             self.rebalance()
 
-        # Find where we're starting from...
+        # Find where we're starting from. If we've already done a fetch, we use 
+        # our internal value. This is also all we can do in the case where 
+        # autocommit is off, since any value in ZK will be out of date.
+        bps_to_offsets = dict(self._bps_to_next_offsets)
         offsets_pulled_from_zk = False
-        if self._bps_to_next_offsets:
-            # We've already done a fetch, we use our internal value. This is
-            # also all we can do in the case where autocommit is off, since any
-            # value in ZK will be out of date
-            bps_to_offsets = self._bps_to_next_offsets
-        else:
-            # In this case, it's our first fetch, and we need to ask ZooKeeper
-            # for our start value. That being said, if the value from ZooKeeper
-            # is out of range for any given partition, we'll simply start at the
-            # most recent value for that partition.
-            bps_to_offsets = self._zk_util.offsets_for(self.consumer_group,
-                                                       self._id,
-                                                       self.broker_partitions)
+
+        if needs_offset_values_from_zk(bps_to_offsets):
+            # We have some offsets, but we've been made responsible for new
+            # BrokerPartitions that we need to lookup.
+            if bps_to_offsets:
+                bps_needing_offsets = [bp for bp, offset in bps_to_offsets.items() 
+                                       if offset is None]
+            # Otherwise, it's our first fetch, so we need everything
+            else:
+                bps_needing_offsets = self.broker_partitions
+
+            bps_to_offsets.update(self._zk_util.offsets_for(self.consumer_group,
+                                                            self._id,
+                                                            bps_needing_offsets))
             offsets_pulled_from_zk = True
 
         # Do all the fetches we need to (this should get replaced with 
@@ -674,6 +684,18 @@ class ZKConsumer(object):
 
         ############## Set our state info... ##############
         self._broker_partitions = all_broker_partitions[start:start+num_parts]
+
+        # We keep a mapping of BrokerPartitions to their offsets. We ditch those
+        # BrokerPartitions we are no longer responsible for...
+        for bp in self._bps_to_next_offsets.keys():
+            if bp not in self._broker_partitions:
+                del self._bps_to_next_offsets[bp]
+
+        # We likewise add new BrokerPartitions we're responsible for to our 
+        # BP->offset mapping, and set their offsets to None, to indicate that
+        # we don't know, and we have to check ZK for them.
+        for bp in self._broker_partitions:
+            self._bps_to_next_offsets.setdefault(bp, None)
 
         # This will collapse duplicates so we only have one conn per host/port
         broker_conn_info = frozenset((bp.broker_id, bp.host, bp.port)
