@@ -8,7 +8,7 @@ install_requires = [
 
 setuptools.setup(
     name = 'brod',
-    version = '0.1.10',
+    version = '0.1.11',
     license = 'MIT',
     description = open('README.md').read(),
     author = "Datadog, Inc.",
@@ -18,5 +18,10 @@ setuptools.setup(
     packages = ['brod'],
     zip_safe = True,
     verbose = False,
-    install_requires=install_requires
+    install_requires=install_requires,
+    entry_points={
+        'console_scripts': [
+            'broderate = brod.util:broderate'
+        ]
+    }
 )
