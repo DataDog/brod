@@ -11,14 +11,18 @@ Behaviors to support:
 * Be able to be jump started from a ZKConsumer
 
 """
-# from base import ConsumerState
-
+import logging
+import time
+from brod import Kafka
+from brod.base import ConsumerStats, MessageSet, FetchResult
 from collections import Mapping
+
+log = logging.getLogger('brod.simple')
 
 class SimpleConsumer(object):
     """We'll make more convenient constructors later..."""
 
-    def __init__(self, topic, broker_partitions):
+    def __init__(self, topic, broker_partitions, end_broker_partitions=None):
         """If broker_partitions is a list of BrokerPartitions, we assume that
         we'll start at the latest offset. If broker_partitions is a mapping of
         BrokerPartitions to offsets, we'll start at those offsets."""
@@ -27,7 +31,7 @@ class SimpleConsumer(object):
         self._stats = ConsumerStats(fetches=0, bytes=0, messages=0, max_fetch=0)
         self._bps_to_next_offsets = broker_partitions
 
-        # This will collapse duplicates so we only have one conn per host/port
+        # This will collapse duplicaets so we only have one conn per host/port
         broker_conn_info = frozenset((bp.broker_id, bp.host, bp.port)
                                      for bp in self._broker_partitions)
         self._connections = dict((broker_id, Kafka(host, port))
@@ -40,8 +44,10 @@ class SimpleConsumer(object):
             self._bps_to_next_offsets = dict((bp, self._connections[bp].latest_offset(bp.topic, bp.partition))
                                              for bp in broker_partitions)
 
+        self._end_broker_partitions = end_broker_partitions or {}
+
     @property
-    def id(): return id(self)
+    def id(self): return id(self)
     @property
     def topic(self): return self._topic
     @property
@@ -76,16 +82,28 @@ class SimpleConsumer(object):
         for bp in bps_to_offsets:
             offset = bps_to_offsets[bp]
             kafka = self._connections[bp.broker_id]
+
             offsets_msgs = kafka.fetch(bp.topic, 
                                        offset,
                                        partition=bp.partition,
                                        max_size=max_size)
             message_sets.append(MessageSet(bp, offset, offsets_msgs))
         
-        result = FetchResult(sorted(message_sets))
+        if message_sets:
+            result = FetchResult(sorted(message_sets))
+        else:
+            message_sets = []
 
-        self._bps_to_next_offsets = dict((msg_set.broker_partition, msg_set.next_offset)
-                                         for msg_set in result)
+        # Filter out broker partitions whose end offsets we've exceeded
+        self._bps_to_next_offsets = {}
+        for msg_result in result:
+            bp = msg_result.broker_partition
+            next_offset = msg_result.next_offset
+            end_offset = self._end_broker_partitions.get(bp, None)
+
+            if end_offset is None or next_offset <= end_offset:
+                self._bps_to_next_offsets[bp] = next_offset
+
         old_stats = self._stats  # fetches bytes messages max_fetch
         self._stats = ConsumerStats(fetches=old_stats.fetches + 1,
                                     bytes=old_stats.bytes + result.num_bytes,
@@ -104,9 +122,7 @@ class SimpleConsumer(object):
                 yield msg_set
             time.sleep(poll_interval)
     
-    def end_at(self, bps_to_offsets):
-        """Don't consume beyond this point for the bps listed"""
-        pass
+
 
 # consumer = SimpleConsumer("topic", broker_list)
 
