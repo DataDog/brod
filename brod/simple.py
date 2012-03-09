@@ -15,7 +15,7 @@ import logging
 import time
 from brod import Kafka
 from brod.base import ConsumerStats, MessageSet, FetchResult
-from collections import Mapping
+from collections import Mapping, defaultdict
 
 log = logging.getLogger('brod.simple')
 
@@ -28,7 +28,7 @@ class SimpleConsumer(object):
         BrokerPartitions to offsets, we'll start at those offsets."""
         self._topic = topic
         self._broker_partitions = sorted(broker_partitions)
-        self._stats = ConsumerStats(fetches=0, bytes=0, messages=0, max_fetch=0)
+        self._stats = defaultdict(lambda: ConsumerStats(fetches=0, bytes=0, messages=0, max_fetch=0))
         self._bps_to_next_offsets = broker_partitions
 
         # This will collapse duplicaets so we only have one conn per host/port
@@ -55,8 +55,6 @@ class SimpleConsumer(object):
     @property
     def autocommit(self): return False
     @property
-    def stats(self): return self._stats
-    @property
     def broker_partitions(self): return self._broker_partitions[:]
     @property
     def brokers(self):
@@ -64,6 +62,25 @@ class SimpleConsumer(object):
 
     def close(self):
         pass
+
+    @property
+    def stats(self): 
+        ''' Returns the aggregate of the stats from all the broker partitions
+        '''
+        fetches = 0
+        bytes = 0
+        messages = 0
+        max_fetch = 0
+        for stats in self._stats.values():
+            fetches += stats.fetches
+            bytes += stats.bytes
+            messages += stats.messages
+            max_fetch = max(max_fetch, stats.max_fetch)
+
+        return ConsumerStats(fetches, bytes, messages, max_fetch)
+
+    def stats_by_broker_partition(self):
+        return dict(self._stats)
 
     def commit_offsets(self):
         """This isn't supported for SimpleConsumers, but is present so that you
@@ -87,12 +104,22 @@ class SimpleConsumer(object):
                                        offset,
                                        partition=bp.partition,
                                        max_size=max_size)
-            message_sets.append(MessageSet(bp, offset, offsets_msgs))
+
+            msg_set = MessageSet(bp, offset, offsets_msgs)
+
+            # fetches bytes messages max_fetch
+            old_stats = self._stats[bp]
+            self._stats[bp] = ConsumerStats(fetches=old_stats.fetches + 1,
+                                        bytes=old_stats.bytes + msg_set.size,
+                                        messages=old_stats.messages + len(msg_set),
+                                        max_fetch=max(old_stats.max_fetch, msg_set.size))
+
+            message_sets.append(msg_set)
         
         if message_sets:
             result = FetchResult(sorted(message_sets))
         else:
-            message_sets = []
+            result = []
 
         # Filter out broker partitions whose end offsets we've exceeded
         self._bps_to_next_offsets = {}
@@ -103,12 +130,7 @@ class SimpleConsumer(object):
 
             if end_offset is None or next_offset <= end_offset:
                 self._bps_to_next_offsets[bp] = next_offset
-
-        old_stats = self._stats  # fetches bytes messages max_fetch
-        self._stats = ConsumerStats(fetches=old_stats.fetches + 1,
-                                    bytes=old_stats.bytes + result.num_bytes,
-                                    messages=old_stats.messages + result.num_messages,
-                                    max_fetch=max(old_stats.max_fetch, result.num_bytes))
+        
         return result
     
     def poll(self,
