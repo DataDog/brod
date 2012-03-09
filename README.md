@@ -40,6 +40,17 @@ http://incubator.apache.org/kafka/
     for offset, message in brod.fetch("test-topic", offset=0):
         print message
 
+### Using a ZooKeeper-based consumer
+
+    from brod.zk import ZKConsumer
+
+    consumer = ZKConsumer('zk_host:2181', 'my_consumer_group', 'my_topic', autocommit=True)
+
+    # Polls forever
+    for msg_set in consumer.poll(poll_interval=1):
+        for offset, msg in msg_set:
+            print offset, msg_set.broker_partition, msg
+
 ### Nonblocking Tornado client support
 
     import time
