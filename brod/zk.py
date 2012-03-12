@@ -21,6 +21,7 @@ from zc.zk import ZooKeeper, FailedConnect
 
 from brod.base import BrokerPartition, ConsumerStats, MessageSet
 from brod.base import ConnectionFailure, FetchResult, KafkaError, OffsetOutOfRange
+from brod.simple import SimpleConsumer
 from brod.blocking import Kafka
 
 log = logging.getLogger('brod.zk')
