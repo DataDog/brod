@@ -91,6 +91,8 @@ class SimpleConsumer(object):
     def fetch(self, max_size=None):
         log.debug("Fetch called on SimpleConsumer {0}".format(self.id))
         bps_to_offsets = self._bps_to_next_offsets
+        if not bps_to_offsets:
+            raise StopIteration()
         
         # Do all the fetches we need to (this should get replaced with 
         # multifetch or performance is going to suck wind later)...
