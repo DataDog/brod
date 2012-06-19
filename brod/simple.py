@@ -91,8 +91,6 @@ class SimpleConsumer(object):
     def fetch(self, max_size=None):
         log.debug("Fetch called on SimpleConsumer {0}".format(self.id))
         bps_to_offsets = self._bps_to_next_offsets
-        if not bps_to_offsets:
-            raise StopIteration()
         
         # Do all the fetches we need to (this should get replaced with 
         # multifetch or performance is going to suck wind later)...
@@ -142,6 +140,8 @@ class SimpleConsumer(object):
              max_size=None,
              retry_limit=3):
         while True:
+            if not self._bps_to_next_offsets:
+                raise StopIteration()
             for msg_set in self.fetch(max_size=max_size):
                 yield msg_set
             time.sleep(poll_interval)
