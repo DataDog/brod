@@ -139,9 +139,7 @@ class SimpleConsumer(object):
              poll_interval=1,
              max_size=None,
              retry_limit=3):
-        while True:
-            if not self._bps_to_next_offsets:
-                raise StopIteration()
+        while self._bps_to_next_offsets:
             for msg_set in self.fetch(max_size=max_size):
                 yield msg_set
             time.sleep(poll_interval)
