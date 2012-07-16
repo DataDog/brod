@@ -1,6 +1,6 @@
 # brod
 
-brod allows you to produce messages to the Kafka distributed publish/subscribe 
+brod lets you produce messages to the Kafka distributed publish/subscribe 
 messaging service. It started as a fork of pykafka 
 (https://github.com/dsully/pykafka), but became a total rewrite as we needed to
 add many features.
