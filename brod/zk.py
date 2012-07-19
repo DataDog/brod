@@ -36,9 +36,9 @@ class ZKUtil(object):
     ACL = [{"perms": 0x1f, "scheme": "world", "id": "anyone"}]
 
     """Abstracts all Kafka-specific ZooKeeper access."""
-    def __init__(self, zk_conn_str):
+    def __init__(self, zk_conn_str, zk_timeout=None):
         try:
-            self._zk = ZooKeeper(zk_conn_str)
+            self._zk = ZooKeeper(zk_conn_str, zk_timeout)
         except FailedConnect as e:
             raise ZKConnectError(e)
     
@@ -309,11 +309,11 @@ class ZKUtil(object):
 
 class ZKProducer(object):
 
-    def __init__(self, zk_conn_str, topic):
+    def __init__(self, zk_conn_str, topic, zk_timeout=None):
         self._id = uuid.uuid1()
         self._topic = topic
         self._bps_changed = False
-        self._zk_util = ZKUtil(zk_conn_str)
+        self._zk_util = ZKUtil(zk_conn_str, zk_timeout)
 
         # Try to pull the brokers and partitions we can send to on this topic
         self._brokers_watch = None
@@ -397,7 +397,7 @@ class ZKProducer(object):
 class ZKConsumer(object):
     """Take 2 on the rebalancing code."""
 
-    def __init__(self, zk_conn, consumer_group, topic, autocommit=True):
+    def __init__(self, zk_conn, consumer_group, topic, autocommit=True, zk_timeout=None):
         """FIXME: switch arg order and default zk_conn to localhost?"""
         # Simple attributes we return as properties
         self._id = self._create_consumer_id(consumer_group)
@@ -406,7 +406,7 @@ class ZKConsumer(object):
         self._autocommit = autocommit
 
         # Internal vars
-        self._zk_util = ZKUtil(zk_conn) 
+        self._zk_util = ZKUtil(zk_conn, zk_timeout)
         self._needs_rebalance = True
         self._broker_partitions = [] # Updated during rebalancing
         self._bps_to_next_offsets = {} # Updated after a successful fetch
