@@ -3,7 +3,7 @@
 import setuptools
 
 install_requires = [
-    "zc.zk==0.5.2",
+    "kazoo>=0.8",
 ]
 
 setuptools.setup(

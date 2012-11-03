@@ -16,8 +16,9 @@ import uuid
 from collections import namedtuple, Mapping, defaultdict
 from itertools import chain
 
-import zookeeper
-from zc.zk import ZooKeeper, FailedConnect
+from kazoo.handlers.threading import TimeoutError
+from kazoo.client import KazooClient
+from kazoo.exceptions import NoNodeException
 
 from brod.base import BrokerPartition, ConsumerStats, MessageSet
 from brod.base import ConnectionFailure, FetchResult, KafkaError, OffsetOutOfRange
@@ -38,12 +39,17 @@ class ZKUtil(object):
     """Abstracts all Kafka-specific ZooKeeper access."""
     def __init__(self, zk_conn_str, zk_timeout=None):
         try:
-            self._zk = ZooKeeper(zk_conn_str, zk_timeout)
-        except FailedConnect as e:
+            if zk_timeout is not None:
+                self._zk = KazooClient(zk_conn_str, zk_timeout)
+                self._zk.start(zk_timeout)
+            else:
+                self._zk = KazooClient(zk_conn_str)
+                self._zk.start()
+        except TimeoutError as e:
             raise ZKConnectError(e)
     
     def close(self):
-        self._zk.close()
+        self._zk.stop()
 
     def broker_partitions_for(self, topic, force_partition_zero=False):
         """Return a list of BrokerPartitions based on values found in 
@@ -138,7 +144,7 @@ class ZKUtil(object):
                                                    bp.partition)
                 try:
                     offset = int(self._zk_properties(offset_path))
-                except zookeeper.NoNodeException as ex:
+                except NoNodeException as ex:
                     # This is counter to the Kafka client behavior, put here for
                     # simplicity for now. FIXME: Dave
                     self._create_path_if_needed(offset_path, 0)
@@ -161,7 +167,7 @@ class ZKUtil(object):
                                                    bp.partition)
                 try:
                     offset_node = self._zk.properties(offset_path)
-                except zookeeper.NoNodeException as ex:
+                except NoNodeException as ex:
                     self._create_path_if_needed(offset_path, bp)
                     offset_node = self._zk.properties(offset_path)
                     next_offset = 0 # If we're creating the node now, assume we
@@ -176,7 +182,7 @@ class ZKUtil(object):
         topic_path = self.path_for_topic(topic)
         try:
             topic_node_children = self._zk_children(topic_path)
-        except zookeeper.NoNodeException:
+        except NoNodeException:
             log.warn(u"Couldn't find {0} - No brokers have topic {1} yet?"
                      .format(topic_path, topic))
             return []
@@ -187,7 +193,7 @@ class ZKUtil(object):
         brokers_path = self.path_for_brokers()
         try:
             topic_node_children = self._zk_children(brokers_path)
-        except zookeeper.NoNodeException:
+        except NoNodeException:
             log.error(u"Couldn't find brokers entry {0}".format(brokers_path))
             return []
 
@@ -231,11 +237,9 @@ class ZKUtil(object):
         consumer_id_path = self.path_for_consumer_id(consumer_group, consumer_id)
         log.info("Registering Consumer {0}, trying to create {1}"
                  .format(consumer_id, consumer_id_path))
-        zookeeper.create(self._zk.handle, 
-                         consumer_id_path,
+        self._zk.create(consumer_id_path,
                          json.dumps({topic : 1}), # topic : # of threads
-                         ZKUtil.ACL,
-                         zookeeper.EPHEMERAL)
+                         ZKUtil.ACL, ephemeral=True, makepath=True)
 
     def _create_path_if_needed(self, path, data=None):
         """Creates permanent nodes for all elements in the path if they don't
@@ -258,14 +262,14 @@ class ZKUtil(object):
         created_so_far = []
         for node in nodes_to_create:
             created_path = _build_path(created_so_far)
-            if node and node not in self._zk.children(created_path).data:
+            if node and node not in self._zk.get_children(created_path):
                 node_to_create = _build_path(created_so_far + [node])
                 # If data is a string, we'll initialize the node with it...
                 if isinstance(data, basestring):
                     init_data = data 
                 else:
                     init_data = json.dumps(data)
-                zookeeper.create(self._zk.handle, node_to_create, init_data, ZKUtil.ACL)
+                self._zk.create(node_to_create, init_data, ZKUtil.ACL)
             created_so_far.append(node)
 
     def path_for_broker_topic(self, broker_id, topic_name):
@@ -298,13 +302,13 @@ class ZKUtil(object):
                                  consumer_id)
 
     def _zk_properties(self, path):
-        node_data = self._zk.properties(path).data
+        node_data, stat = self._zk.get(path)
         if 'string_value' in node_data:
             return node_data['string_value']
         return node_data
 
     def _zk_children(self, path):
-        return self._zk.children(path).data
+        return self._zk.get_children(path)
 
 
 class ZKProducer(object):
@@ -374,12 +378,14 @@ class ZKProducer(object):
         path_for_brokers = self._zk_util.path_for_brokers()
         path_for_topic = self._zk_util.path_for_topic(self.topic)
         if self._brokers_watch is None and zk.exists(path_for_brokers):
-            self._brokers_watch = zk.children(path_for_brokers)(self._unbalance)
+            self._brokers_watch = zk.get_children(path_for_brokers,
+                                                  watch=self._unbalance)
         if self._topic_watch is None and zk.exists(path_for_topic):
-            self._topic_watch = zk.children(path_for_topic)(self._unbalance)
+            self._topic_watch = zk.get_children(path_for_topic,
+                                                watch=self._unbalance)
 
-        log.debug("Producer {0} has watches: {1}"
-                  .format(self._id, sorted(zk.watches.data.keys())))
+        # log.debug("Producer {0} has watches: {1}"
+        #           .format(self._id, sorted(zk.watches.data.keys())))
 
     def _all_callbacks_registered(self):
         """Are all the callbacks we need to know when to rebalance actually 
