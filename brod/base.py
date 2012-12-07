@@ -546,6 +546,43 @@ class Brod(object):
 
         return response_data
 
+    def offsets(self, topic, partition, time, max_offsets):
+        return self.offsets_many([(topic, [(partition, time, max_offsets)])])
+
+    def offsets_many(self, offset_requests):
+        buf = self._create_request(api_key=2, api_version=1,
+                                   with_correlation_id=False)
+        replica_id = -1
+        buf.write(struct.pack('>ii', replica_id, len(offset_requests)))
+        for topic, partitions in offset_requests:
+            topic_len = len(topic)
+            buf.write(struct.pack('>h{0}si'.format(topic_len), topic_len,
+                topic, len(partitions)))
+            for partition, time, max_offsets in partitions:
+                buf.write(struct.pack('>Iqi', partition, time, max_offsets))
+
+        response_data = []
+        with self._send_request(buf, expect_correlation_id=False) as response:
+            (num_topics,) = struct.unpack('>i', response.read(4))
+            for n in range(num_topics):
+                (topic_len,) = struct.unpack('>h', response.read(2))
+
+                bin_format = '>{0}si'.format(topic_len)
+                (topic, num_partitions) = struct.unpack(bin_format,
+                                            response.read(topic_len + 4))
+                partitions = []
+                for m in range(num_partitions):
+                    (partition, error_code, num_offsets) = struct.unpack('>ihi',
+                        response.read(4 + 2 + 4))
+
+                    offsets = []
+                    for l in range(num_offsets):
+                        (offset,) = struct.unpack('>q', response.read(8))
+                        offsets.append(offset)
+                    partitions.append((partition, error_code, offsets))
+                response_data.append((topic, partitions))
+        return response_data
+
     def _create_request(self, api_key, api_version, with_correlation_id=True):
         buf = io.BytesIO()
         if with_correlation_id:
@@ -813,7 +850,7 @@ if __name__ == '__main__':
     print messages
 
     print brod.metadata(['test', 'asdf'])
-
+    print brod.offsets(topic, partition, -1, 5)
 
 
 
