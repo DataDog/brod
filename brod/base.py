@@ -5,6 +5,7 @@ import time
 import sys, traceback
 from cStringIO import StringIO
 from collections import namedtuple
+from contextlib import contextmanager
 from datetime import datetime
 from functools import partial
 
@@ -272,6 +273,97 @@ class Brod(object):
         self.client_id = client_id or 'brod'
         self._request_seq = 0
 
+    def metadata(self, topics):
+        if isinstance(topics, (str, unicode)):
+            topics = [topics]
+            single = True
+        else:
+            single = False
+
+        buf = self._create_request(api_key=3, api_version=1,
+                                   with_correlation_id=False)
+
+        # num topics
+        buf.write(struct.pack('>I', len(topics)))
+
+        for topic in topics:
+            # topic
+            topic_len = len(topic)
+            buf.write(struct.pack('>H{0}s'.format(topic_len),
+                topic_len, topic))
+
+        response_data = []
+        with self._send_request(buf, expect_correlation_id=False) as response:
+            # num topics
+            (num_topics,) = struct.unpack('>I', response.read(4))
+            for n in range(num_topics):
+                (topic_error_code, topic_name_len) = struct.unpack('>hh',response.read(2 + 2))
+
+                bin_format = '>{0}sI'.format(topic_name_len)
+                (topic_name, num_partitions) = struct.unpack(bin_format,
+                    response.read(topic_name_len + 4))
+
+                partitions = []
+                for m in range(num_partitions):
+                    (partition_error_code,
+                     partition_id,
+                     leader_exists) = struct.unpack('>hI?',
+                        response.read(2 + 4 + 1))
+
+                     # Get the leader, if it exists
+                    if bool(leader_exists):
+                        leader_node_id, creator_id_len = struct.unpack('>Ih',
+                                                    response.read(4 + 2))
+
+                        bin_format = '>{0}sh'.format(creator_id_len)
+                        leader_creator_id, host_len = struct.unpack(
+                            bin_format, response.read(creator_id_len + 2))
+
+                        bin_format = '>{0}sI'.format(host_len)
+                        leader_host, leader_port = struct.unpack(bin_format,
+                            response.read(host_len + 4))
+                        leader = (leader_node_id, leader_creator_id,
+                                  leader_host, leader_port)
+                    else:
+                        leader = None
+
+                    # Get the replicas
+                    (num_replicas,) = struct.unpack('>h', response.read(2))
+                    replicas = []
+                    for l in range(num_replicas):
+                        node_id, creator_id_len = struct.unpack('>Ih',
+                                                    response.read(4 + 2))
+
+                        bin_format = '>{0}sh'.format(creator_id_len)
+                        creator_id, host_len = struct.unpack(bin_format,
+                                    response.read(creator_id_len + 2))
+
+                        bin_format = '>{0}sI'.format(host_len)
+                        host, port = struct.unpack(bin_format,
+                                        response.read(host_len + 4))
+                        replicas.append((node_id, creator_id, host, port))
+
+                    # Get the in-sync replicas
+                    (num_insync,) = struct.unpack('>h', response.read(2))
+                    insync = []
+                    for l in range(num_insync):
+                        node_id, creator_id_len = struct.unpack('>Ih',
+                                                    response.read(4 + 2))
+
+                        bin_format = '>{0}sh'.format(creator_id_len)
+                        creator_id, host_len = struct.unpack(bin_format,
+                                    response.read(creator_id_len + 2))
+
+                        bin_format = '>{0}sI'.format(host_len)
+                        host, port = struct.unpack(bin_format,
+                                        response.read(host_len + 4))
+                        insync.append((node_id, creator_id, host, port))
+                    partitions.append((partition_error_code, partition_id,
+                        leader, replicas, insync))
+                response_data.append((topic_error_code, topic_name, partitions))
+        return response_data
+
+
     def produce(self, required_acks, timeout, topic_name, partition,
                 message_set):
 
@@ -359,25 +451,10 @@ class Brod(object):
                 buf.write(struct.pack('>I', end_message_set_pos - start_message_set_pos))
                 buf.seek(end_message_set_pos)
 
-        request_size = self._close_request(buf)
-
-        sock = socket.socket()
-        try:
-            sock.connect((self.host, self.port))
-
-            # Write the request
-            bytes_sent = 0
-            while bytes_sent < request_size:
-                buf.seek(bytes_sent)
-                bytes_sent += sock.send(buf.read())
-            # print 'Sent {0} of {1} bytes'.format(bytes_sent, len(encoded_request))
-
-            # Read the response size
-            resp_version, resp_correlation_id, response = self._read_response(sock)
-
+        response_data = []
+        with self._send_request(buf) as response:
             # num topics
             (num_topics,) = struct.unpack('>I', response.read(4))
-            response_data = []
             for n in range(num_topics):
                 (topic_name_len,) = struct.unpack('>h', response.read(2))
                 (topic_name, num_partitions) = struct.unpack('>{0}sI'.format(topic_name_len),
@@ -389,12 +466,7 @@ class Brod(object):
                     partition_offsets.append((partition, error_code, offset))
                 response_data.append((topic_name, partition_offsets))
 
-        finally:
-            sock.close()
-
-        return (resp_version,
-             resp_correlation_id,
-             response_data)
+        return response_data
 
     def fetch(self, replica_id, max_wait_time, min_bytes, topic_name,
               partition, fetch_offset, max_bytes):
@@ -423,26 +495,10 @@ class Brod(object):
                 buf.write(struct.pack('>IqI',
                     partition, fetch_offset, max_bytes))
 
-        request_size = self._close_request(buf)
-
-        sock = socket.socket()
-        try:
-            sock.connect((self.host, self.port))
-
-            # Write the request
-            bytes_sent = 0
-            while bytes_sent < request_size:
-                buf.seek(bytes_sent)
-                chunk = buf.read()
-                # print repr(chunk), bytes_sent
-                bytes_sent += sock.send(chunk)
-
-            # Read the response size
-            resp_version, resp_correlation_id, response = self._read_response(sock)
-
+        response_data = []
+        with self._send_request(buf) as response:
             # num topics
             (num_topics,) = struct.unpack('>I', response.read(4))
-            response_data = []
             for n in range(num_topics):
                 (topic_name_len,) = struct.unpack('>h', response.read(2))
                 (topic_name, num_partitions) = struct.unpack('>{0}sI'.format(topic_name_len), response.read(topic_name_len + 4))
@@ -488,47 +544,71 @@ class Brod(object):
                     partition_messages.append((partition, error_code, fetched_offset, highwater_mark_offset, messages))
                 response_data.append((topic_name, partition_messages))
 
-        finally:
-            sock.close()
+        return response_data
 
-        return resp_version, resp_correlation_id, response_data
-
-    def _create_request(self, api_key, api_version):
+    def _create_request(self, api_key, api_version, with_correlation_id=True):
         buf = io.BytesIO()
-        self._request_seq += 1
-        correlation_id = self._request_seq
+        if with_correlation_id:
+            self._request_seq += 1
+            correlation_id = self._request_seq
+            bin_format = '>IHHih{0}s'.format(len(self.client_id))
+            params = (self.PLACEHOLDER, api_key, api_version, correlation_id,
+                      len(self.client_id), self.client_id)
+        else:
+            bin_format = '>IHHh{0}s'.format(len(self.client_id))
+            params = (self.PLACEHOLDER, api_key, api_version,
+                      len(self.client_id), self.client_id)
 
         # generic request parameters
-        buf.write(struct.pack('>IHHih{0}s'.format(len(self.client_id)),
-            self.PLACEHOLDER, api_key, api_version, correlation_id,
-            len(self.client_id), self.client_id))
+        buf.write(struct.pack(bin_format, *params))
         return buf
 
-    def _close_request(self, buf):
+    @contextmanager
+    def _send_request(self, buf, expect_correlation_id=True):
         # Fill in the total request size
-        end_pos = buf.tell()
-        request_size = end_pos - self.REQ_SIZE_LEN
+        request_size = buf.tell()
+        request_size = request_size - self.REQ_SIZE_LEN
         buf.seek(0)
         buf.write(struct.pack('>I', request_size))
         buf.seek(0)
-        return end_pos
 
-    def _read_response(self, sock):
-        response_size = sock.recv(self.REQ_SIZE_LEN)
-        (size,) = struct.unpack('>i', response_size)
-
-        # Read the response
+        # Open the socket and send the data
         response = io.BytesIO()
-        bytes_read = 0
-        while bytes_read < size:
-            response.write(sock.recv(size - bytes_read))
-            bytes_read = response.tell()
+        sock = socket.socket()
+        try:
+            sock.connect((self.host, self.port))
+
+            # Write the request
+            bytes_sent = 0
+            while bytes_sent < request_size:
+                buf.seek(bytes_sent)
+                bytes_sent += sock.send(buf.read())
+
+            # Read the response size
+            response_size = sock.recv(self.REQ_SIZE_LEN)
+            (size,) = struct.unpack('>i', response_size)
+
+            # Read the response
+            bytes_read = 0
+            while bytes_read < size:
+                response.write(sock.recv(size - bytes_read))
+                bytes_read = response.tell()
+        finally:
+            sock.close()
+
         response.seek(0)
 
         # General response vals
-        resp_version, resp_correlation_id = struct.unpack('>hi',
-            response.read(2 + 4))
-        return resp_version, resp_correlation_id, response
+        if expect_correlation_id:
+            resp_version, resp_correlation_id = struct.unpack('>hi',
+                response.read(2 + 4))
+        else:
+            (resp_version,) = struct.unpack('>h', response.read(2))
+
+        try:
+            yield response
+        finally:
+            response.close()
 
     @staticmethod
     def _calculate_checksum(val):
@@ -721,17 +801,18 @@ if __name__ == '__main__':
     topic = 'test'
     partition = 0
     input_messages = ['yo', 'sup']
-    _, _, produce_data = brod.produce(1, 5, topic, partition, input_messages)
+    produce_data = brod.produce(1, 5, topic, partition, input_messages)
     _, partition_offsets = produce_data[0]
     partition, error_code, offset = partition_offsets[0]
 
-    _, _, fetch_data = brod.fetch(-1, 1000, 1, topic, partition, offset, 1024 * 1024)
+    fetch_data = brod.fetch(-1, 1000, 1, topic, partition, offset, 1024 * 1024)
     topic, partition_messages = fetch_data[0]
     partition, error_code, fetched_offset, highwater_mark_offset, messages = partition_messages[0]
 
     assert input_messages == [m for o, m in messages], (input_messages, messages)
     print messages
 
+    print brod.metadata(['test', 'asdf'])
 
 
 
