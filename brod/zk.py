@@ -124,7 +124,7 @@ class ZKUtil(object):
         
         return state
 
-    def offsets_for(self, consumer_group, consumer_id, broker_partitions):
+    def offsets_for(self, consumer_group, broker_partitions):
         """Return a dictionary mapping broker_partitions to offsets."""
         UNKNOWN_OFFSET = 2**63 - 1 # Long.MAX_VALUE, it's what Kafka's client does
         bps_to_offsets = {}
@@ -533,7 +533,6 @@ class ZKConsumer(object):
                 bps_needing_offsets = self.broker_partitions
 
             bps_to_offsets.update(self._zk_util.offsets_for(self.consumer_group,
-                                                            self._id,
                                                             bps_needing_offsets))
             offsets_pulled_from_zk = True
 
