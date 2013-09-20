@@ -119,7 +119,7 @@ class SimpleConsumer(object):
         if message_sets:
             result = FetchResult(sorted(message_sets))
         else:
-            result = []
+            result = FetchResult([])
 
         # Filter out broker partitions whose end offsets we've exceeded
         self._bps_to_next_offsets = {}
