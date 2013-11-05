@@ -88,7 +88,7 @@ class SimpleConsumer(object):
         ZKConsumer."""
         pass
 
-    def fetch(self, min_size=None, max_size=None, fetch_step=None):
+    def fetch(self, max_size=None, min_size=None, fetch_step=None):
         log.debug("Fetch called on SimpleConsumer {0}".format(self.id))
         bps_to_offsets = self._bps_to_next_offsets
         

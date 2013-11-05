@@ -286,8 +286,9 @@ class BaseKafka(object):
         # Send the request
         return self._write(request, callback)
     
-    def fetch(self, topic, offset, partition=None, min_size=None, max_size=None,
-              fetch_step=None, callback=None, include_corrupt=False):
+    def fetch(self, topic, offset, partition=None, max_size=None,
+              callback=None, include_corrupt=False, min_size=None,
+              fetch_step=None):
         """ Fetch messages from a kafka queue
             
             This will sequentially read and return all available messages 
@@ -297,11 +298,11 @@ class BaseKafka(object):
                 topic:      kafka topic to read from
                 offset:     offset of the first message requested
                 partition:  topic partition to read from (optional)
+                max_size:   maximum size to read from the queue,
+                            in bytes (optional)
                 min_size:   minimum size to read from the queue. if min_size and
                             fetch_step are defined, then we'll fetch sizes from
                             min_size to max_size until we have a result.
-                max_size:   maximum size to read from the queue,
-                            in bytes (optional)
                 fetch_step: the step increase for each fetch to the queue. only
                             applies if both a min_size and max_size are set.
 
