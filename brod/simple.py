@@ -88,7 +88,7 @@ class SimpleConsumer(object):
         ZKConsumer."""
         pass
 
-    def fetch(self, max_size=None):
+    def fetch(self, min_size=None, max_size=None, fetch_step=None):
         log.debug("Fetch called on SimpleConsumer {0}".format(self.id))
         bps_to_offsets = self._bps_to_next_offsets
         
@@ -103,7 +103,9 @@ class SimpleConsumer(object):
             offsets_msgs = kafka.fetch(bp.topic, 
                                        offset,
                                        partition=bp.partition,
-                                       max_size=max_size)
+                                       min_size=min_size,
+                                       max_size=max_size,
+                                       fetch_step=fetch_step)
 
             msg_set = MessageSet(bp, offset, offsets_msgs)
 
@@ -137,10 +139,13 @@ class SimpleConsumer(object):
              start_offsets=None,
              end_offsets=None,
              poll_interval=1,
+             min_size=None,
              max_size=None,
+             fetch_step=None,
              retry_limit=3):
         while self._bps_to_next_offsets:
-            for msg_set in self.fetch(max_size=max_size):
+            for msg_set in self.fetch(min_size=min_size, max_size=max_size,
+                                      fetch_step=fetch_step):
                 yield msg_set
             time.sleep(poll_interval)
     

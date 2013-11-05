@@ -286,7 +286,8 @@ class BaseKafka(object):
         # Send the request
         return self._write(request, callback)
     
-    def fetch(self, topic, offset, partition=None, max_size=None, callback=None, include_corrupt=False):
+    def fetch(self, topic, offset, partition=None, min_size=None, max_size=None,
+              fetch_step=None, callback=None, include_corrupt=False):
         """ Fetch messages from a kafka queue
             
             This will sequentially read and return all available messages 
@@ -296,37 +297,49 @@ class BaseKafka(object):
                 topic:      kafka topic to read from
                 offset:     offset of the first message requested
                 partition:  topic partition to read from (optional)
-                max_size:   maximum size to read from the queue, 
+                min_size:   minimum size to read from the queue. if min_size and
+                            fetch_step are defined, then we'll fetch sizes from
+                            min_size to max_size until we have a result.
+                max_size:   maximum size to read from the queue,
                             in bytes (optional)
-                
+                fetch_step: the step increase for each fetch to the queue. only
+                            applies if both a min_size and max_size are set.
+
             Returns:
                 a list: [(offset, message), ]
         """
+        if min_size and max_size and fetch_step:
+            fetch_sizes = xrange(min_size, max_size, fetch_step)
+        else:
+            fetch_sizes = [max_size or self.max_size]
 
         # Clean up the input parameters
         topic = topic.encode('utf-8')
         partition = partition or 0
-        max_size = max_size or self.max_size
-        
-        # Encode the request
-        fetch_request_size, fetch_request = self._fetch_request(topic, offset, 
-            partition, max_size)
-        
-        # Send the request. The logic for handling the response 
-        # is in _read_fetch_response().
-        try:
-            result = self._write(
-                fetch_request_size, 
-                partial(self._wrote_request_size, 
-                        fetch_request, 
-                        partial(self._read_fetch_response, 
-                                callback, 
-                                offset, 
-                                include_corrupt
-                                )))
-        except IOError as io_err:
-            kafka_log.exception(io_err)
-            raise ConnectionFailure("Fetch failure because of: {0}".format(io_err))
+
+        for fetch_size in fetch_sizes:
+            # Encode the request
+            fetch_request_size, fetch_request = self._fetch_request(topic,
+                offset, partition, fetch_size)
+
+            # Send the request. The logic for handling the response
+            # is in _read_fetch_response().
+            try:
+                result = self._write(
+                    fetch_request_size,
+                    partial(self._wrote_request_size,
+                            fetch_request,
+                            partial(self._read_fetch_response,
+                                    callback,
+                                    offset,
+                                    include_corrupt
+                                    )))
+            except IOError as io_err:
+                kafka_log.exception(io_err)
+                raise ConnectionFailure("Fetch failure because of: {0}".format(io_err))
+
+            if result:
+                return result
 
         return result
 
@@ -650,7 +663,6 @@ class Partition(object):
         where the next message *will* be placed, whenever it arrives."""
         return self._kafka.offsets(self._topic, LATEST_OFFSET, max_offsets=1,
                                    partition=self._partition)[0]
-    
 
     # FIXME DO: Put callback in
     # Partition should have it's own fetch() with the basic stuff pre-filled
@@ -658,7 +670,9 @@ class Partition(object):
              offset=None,
              end_offset=None,
              poll_interval=1,
+             min_size=None,
              max_size=None,
+             fetch_step=None,
              include_corrupt=False,
              retry_limit=3):
         """Poll and iterate through messages from a Kafka queue.
@@ -669,7 +683,9 @@ class Partition(object):
                         the message that corresponds to end_offset, and then
                         stop.
             poll_interval: How many seconds to pause between polling
+            min_size:   minimum size to read from the queue
             max_size:   maximum size to read from the queue, in bytes
+            fetch_step: the step to increase the fetch size from min to max
             include_corrupt: 
             
         
@@ -710,13 +726,22 @@ class Partition(object):
         seconds_slept = 0
         polling_start_time = datetime.now()
 
+        # Try fetching with a set of different max sizes until we return a
+        # set of messages.
+        if min_size and max_size and fetch_step:
+            fetch_sizes = range(min_size, max_size, fetch_step)
+        else:
+            fetch_sizes = [max_size]
+
         # Shorthand fetch call alias with everything filled in except offset
         # The return from a call to fetch is list of (offset, msg) tuples that 
         # look like: [(0, 'Rusty'), (14, 'Patty'), (28, 'Jack'), (41, 'Clyde')]
         fetch_messages = partial(self._kafka.fetch,
                                  self._topic,
                                  partition=self._partition,
+                                 min_size=min_size,
                                  max_size=max_size,
+                                 fetch_step=fetch_step,
                                  callback=None,
                                  include_corrupt=include_corrupt)
         retry_attempts = 0
