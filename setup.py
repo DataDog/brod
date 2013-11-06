@@ -8,7 +8,7 @@ install_requires = [
 
 setuptools.setup(
     name = 'brod',
-    version = '0.3.3',
+    version = '0.4.3',
     license = 'MIT',
     description = """brod lets you produce messages to the Kafka distributed publish/subscribe messaging service. It started as a fork of pykafka (https://github.com/dsully/pykafka), but became a total rewrite as we needed to add many features.
 
