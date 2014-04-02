@@ -1,5 +1,7 @@
 # brod
 
+__This library is not maintained anymore and only supports Kafka 0.6. Please use [mumrah/kafka-python](https://github.com/mumrah/kafka-python) if you want Kafka 0.8 support.__
+
 brod lets you produce messages to the Kafka distributed publish/subscribe 
 messaging service. It started as a fork of pykafka 
 (https://github.com/dsully/pykafka), but became a total rewrite as we needed to
